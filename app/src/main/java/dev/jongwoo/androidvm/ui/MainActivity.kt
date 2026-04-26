@@ -161,6 +161,18 @@ private fun MainScreen(config: VmConfig) {
                         installingRom = false
                     }
                 },
+                onRepair = {
+                    scope.launch {
+                        installingRom = true
+                        romMessage = "Repairing guest image"
+                        val result = withContext(Dispatchers.IO) {
+                            romInstaller.repair(config.instanceId)
+                        }
+                        romMessage = result.message
+                        romSnapshot = romInstaller.snapshot(config.instanceId)
+                        installingRom = false
+                    }
+                },
             )
 
             OutlinedCard(modifier = Modifier.fillMaxWidth()) {
@@ -196,6 +208,7 @@ private fun RomPipelineCard(
     installing: Boolean,
     onRefresh: () -> Unit,
     onInstall: () -> Unit,
+    onRepair: () -> Unit,
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -209,6 +222,7 @@ private fun RomPipelineCard(
             )
             Text("Candidates: ${snapshot.candidates.size}")
             Text("Installed: ${snapshot.installedManifest?.name ?: "none"}")
+            Text("Image: ${snapshot.imageState.name}")
             Text("Health: ${snapshot.health.summary}")
             Text(
                 text = message,
@@ -224,6 +238,12 @@ private fun RomPipelineCard(
                     enabled = !installing,
                 ) {
                     Text(if (installing) "Installing" else "Install")
+                }
+                OutlinedButton(
+                    onClick = onRepair,
+                    enabled = !installing && snapshot.needsRepair,
+                ) {
+                    Text("Repair")
                 }
             }
         }

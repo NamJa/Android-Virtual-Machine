@@ -13,11 +13,14 @@ class RomInstaller(private val context: Context) {
     fun snapshot(instanceId: String = VmConfig.DEFAULT_INSTANCE_ID): RomPipelineSnapshot {
         val instancePaths = paths.ensureInstance(instanceId)
         val installedManifest = readInstalledManifest(instancePaths)
+        val candidates = bundledCandidates()
+        val health = healthCheck.check(instancePaths)
         return RomPipelineSnapshot(
             instanceId = instanceId,
-            candidates = bundledCandidates(),
+            candidates = candidates,
             installedManifest = installedManifest,
-            health = healthCheck.check(instancePaths),
+            health = health,
+            imageState = resolveRomImageState(installedManifest, candidates, health),
         )
     }
 
@@ -114,6 +117,7 @@ class RomInstaller(private val context: Context) {
         instanceId: String = VmConfig.DEFAULT_INSTANCE_ID,
         onProgress: (RomInstallProgress) -> Unit = {},
     ): RomInstallResult {
+        var stagingRootRef: File? = null
         return runCatching {
             onProgress(RomInstallProgress(RomInstallPhase.VERIFY, "Verifying ${candidate.manifest.name}"))
             val verification = verify(candidate)
@@ -128,6 +132,7 @@ class RomInstaller(private val context: Context) {
 
             val instancePaths = paths.ensureInstance(instanceId)
             val stagingRoot = File(instancePaths.stagingDir, "install-${System.currentTimeMillis()}")
+            stagingRootRef = stagingRoot
             val stagingRootfs = File(stagingRoot, "rootfs")
             stagingRoot.deleteRecursively()
             stagingRootfs.mkdirs()
@@ -184,12 +189,41 @@ class RomInstaller(private val context: Context) {
                 health = committedHealth,
             )
         }.getOrElse { error ->
+            stagingRootRef?.deleteRecursively()
             RomInstallResult(
                 status = RomInstallStatus.IO_ERROR,
                 message = error.message ?: error::class.java.simpleName,
                 manifest = candidate.manifest,
             )
         }
+    }
+
+    fun repair(
+        instanceId: String = VmConfig.DEFAULT_INSTANCE_ID,
+        onProgress: (RomInstallProgress) -> Unit = {},
+    ): RomInstallResult {
+        val snapshot = snapshot(instanceId)
+        if (snapshot.isInstalled) {
+            return RomInstallResult(
+                status = RomInstallStatus.ALREADY_HEALTHY,
+                message = "Rootfs is already installed and healthy",
+                manifest = snapshot.installedManifest,
+                health = snapshot.health,
+            )
+        }
+
+        val candidate = snapshot.repairCandidate
+            ?: return RomInstallResult(
+                status = RomInstallStatus.NO_CANDIDATE,
+                message = "No repair candidate found in assets/$GUEST_ASSET_DIR",
+            )
+
+        val instancePaths = paths.ensureInstance(instanceId)
+        onProgress(RomInstallProgress(RomInstallPhase.DISCOVER, "Repairing ${candidate.manifest.name}"))
+        instancePaths.rootfsDir.deleteRecursively()
+        instancePaths.imageManifestFile.delete()
+        clearStaging(instancePaths)
+        return install(candidate, instanceId, onProgress)
     }
 
     private fun readInstalledManifest(instancePaths: InstancePaths): RomImageManifest? {
@@ -215,6 +249,11 @@ class RomInstaller(private val context: Context) {
             copyDirectory(stagedRootfs, destinationRootfs)
             stagedRootfs.deleteRecursively()
         }
+    }
+
+    private fun clearStaging(instancePaths: InstancePaths) {
+        instancePaths.stagingDir.listFiles().orEmpty().forEach { it.deleteRecursively() }
+        instancePaths.stagingDir.mkdirs()
     }
 
     private fun copyDirectory(source: File, destination: File) {

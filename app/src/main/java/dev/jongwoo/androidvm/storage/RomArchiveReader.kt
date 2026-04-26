@@ -2,9 +2,12 @@ package dev.jongwoo.androidvm.storage
 
 import android.content.Context
 import java.io.File
+import java.io.InputStream
 import java.util.zip.ZipInputStream
 
-class RomArchiveReader(private val context: Context) {
+class RomArchiveReader(private val openAsset: (String) -> InputStream) {
+    constructor(context: Context) : this({ assetPath -> context.assets.open(assetPath) })
+
     fun extract(
         candidate: RomImageCandidate,
         destinationRootfs: File,
@@ -24,7 +27,7 @@ class RomArchiveReader(private val context: Context) {
     ): RomArchiveExtractionResult {
         destinationRootfs.mkdirs()
         val canonicalDestination = destinationRootfs.canonicalFile
-        context.assets.open(candidate.archiveAssetPath).use { input ->
+        openAsset(candidate.archiveAssetPath).use { input ->
             ZipInputStream(input.buffered()).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break

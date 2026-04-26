@@ -84,9 +84,47 @@ data class RomPipelineSnapshot(
     val candidates: List<RomImageCandidate>,
     val installedManifest: RomImageManifest?,
     val health: RootfsHealthResult,
+    val imageState: RomImageState,
 ) {
     val isInstalled: Boolean
-        get() = installedManifest != null && health.ok
+        get() = imageState == RomImageState.INSTALLED
+
+    val needsRepair: Boolean
+        get() = imageState == RomImageState.DAMAGED ||
+            imageState == RomImageState.VERSION_MISMATCH ||
+            imageState == RomImageState.ASSET_MISSING
+
+    val repairCandidate: RomImageCandidate?
+        get() = installedManifest
+            ?.let { installed -> candidates.firstOrNull { it.manifest.name == installed.name } }
+            ?: candidates.firstOrNull()
+}
+
+enum class RomImageState {
+    NOT_INSTALLED,
+    INSTALLED,
+    DAMAGED,
+    VERSION_MISMATCH,
+    ASSET_MISSING,
+}
+
+fun resolveRomImageState(
+    installedManifest: RomImageManifest?,
+    candidates: List<RomImageCandidate>,
+    health: RootfsHealthResult,
+): RomImageState {
+    if (installedManifest == null) {
+        return RomImageState.NOT_INSTALLED
+    }
+    val matchingCandidate = candidates.firstOrNull { it.manifest.name == installedManifest.name }
+        ?: return RomImageState.ASSET_MISSING
+    if (matchingCandidate.manifest != installedManifest) {
+        return RomImageState.VERSION_MISMATCH
+    }
+    if (!health.ok) {
+        return RomImageState.DAMAGED
+    }
+    return RomImageState.INSTALLED
 }
 
 data class RomInstallResult(
@@ -102,6 +140,7 @@ data class RomInstallResult(
 
 enum class RomInstallStatus {
     INSTALLED,
+    ALREADY_HEALTHY,
     NO_CANDIDATE,
     VERIFICATION_FAILED,
     UNSUPPORTED_FORMAT,
