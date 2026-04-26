@@ -1,0 +1,11 @@
+{
+  "name": "androidfs_7.1.2_arm64_debug",
+  "guestVersion": "7.1.2",
+  "guestArch": "arm64",
+  "format": "zip",
+  "compressedSize": 1587,
+  "uncompressedSize": 327,
+  "sha256": "2641d5226fe923f4a0266b0911da5188cedc86c480044daefe0197fa1eca5641",
+  "createdAt": "2024-01-01T00:00:00Z",
+  "minHostSdk": 26
+}

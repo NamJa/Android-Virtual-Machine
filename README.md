@@ -36,3 +36,14 @@ sdk.dir=/Users/jongwoo/Library/Android/sdk
 - `docs/planning/stage-05-graphics-input.md`
 - `docs/planning/stage-06-apk-install-launch.md`
 - `docs/planning/stage-07-permission-bridges.md`
+
+## Debug Guest Fixture
+
+Debug builds can include a tiny clean-room rootfs fixture for exercising the ROM
+install pipeline without bundling proprietary files:
+
+```sh
+tools/create_debug_guest_fixture.sh
+```
+
+The generated files live under `app/src/debug/assets/guest`.
