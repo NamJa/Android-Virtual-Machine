@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Android Virtual Machine</string>
+    <string name="vm_notification_channel">VM runtime</string>
+    <string name="vm_notification_title">Android VM runtime</string>
+    <string name="vm_notification_body">The guest runtime process is active.</string>
+    <string name="vm_display_label">VM display</string>
+</resources>
