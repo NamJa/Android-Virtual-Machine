@@ -22,17 +22,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.jongwoo.androidvm.storage.InstanceStore
+import dev.jongwoo.androidvm.storage.RomInstaller
+import dev.jongwoo.androidvm.storage.RomPipelineSnapshot
 import dev.jongwoo.androidvm.ui.theme.AvmAppTheme
 import dev.jongwoo.androidvm.vm.VmConfig
 import dev.jongwoo.androidvm.vm.VmInstanceService
 import dev.jongwoo.androidvm.vm.VmNativeActivity
 import dev.jongwoo.androidvm.vm.VmState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,7 +56,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainScreen(config: VmConfig) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val romInstaller = remember(context) { RomInstaller(context) }
     var state by remember { mutableStateOf(VmState.STOPPED) }
+    var romSnapshot by remember { mutableStateOf(romInstaller.snapshot(config.instanceId)) }
+    var romMessage by remember { mutableStateOf("ROM pipeline is ready") }
+    var installingRom by remember { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -130,6 +141,28 @@ private fun MainScreen(config: VmConfig) {
                 }
             }
 
+            RomPipelineCard(
+                snapshot = romSnapshot,
+                message = romMessage,
+                installing = installingRom,
+                onRefresh = {
+                    romSnapshot = romInstaller.snapshot(config.instanceId)
+                    romMessage = "ROM scan refreshed"
+                },
+                onInstall = {
+                    scope.launch {
+                        installingRom = true
+                        romMessage = "Installing guest image"
+                        val result = withContext(Dispatchers.IO) {
+                            romInstaller.installDefault(config.instanceId)
+                        }
+                        romMessage = result.message
+                        romSnapshot = romInstaller.snapshot(config.instanceId)
+                        installingRom = false
+                    }
+                },
+            )
+
             OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -152,6 +185,47 @@ private fun MainScreen(config: VmConfig) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.64f),
             )
+        }
+    }
+}
+
+@Composable
+private fun RomPipelineCard(
+    snapshot: RomPipelineSnapshot,
+    message: String,
+    installing: Boolean,
+    onRefresh: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "ROM Image",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text("Candidates: ${snapshot.candidates.size}")
+            Text("Installed: ${snapshot.installedManifest?.name ?: "none"}")
+            Text("Health: ${snapshot.health.summary}")
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onRefresh, enabled = !installing) {
+                    Text("Scan")
+                }
+                Button(
+                    onClick = onInstall,
+                    enabled = !installing,
+                ) {
+                    Text(if (installing) "Installing" else "Install")
+                }
+            }
         }
     }
 }

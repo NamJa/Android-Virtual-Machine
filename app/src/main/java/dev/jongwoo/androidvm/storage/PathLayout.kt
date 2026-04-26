@@ -16,14 +16,22 @@ class PathLayout(context: Context) {
 
     fun ensureInstance(instanceId: String): InstancePaths {
         val instanceRoot = File(ensureRoot(), "instances/$instanceId")
+        val configDir = File(instanceRoot, "config")
+        val rootfsDir = File(instanceRoot, "rootfs")
         val paths = InstancePaths(
             id = instanceId,
             root = instanceRoot,
-            dataDir = File(instanceRoot, "data"),
+            configDir = configDir,
+            rootfsDir = rootfsDir,
+            dataDir = File(rootfsDir, "data"),
+            cacheDir = File(rootfsDir, "cache"),
             logsDir = File(instanceRoot, "logs"),
             runtimeDir = File(instanceRoot, "runtime"),
             sharedDir = File(instanceRoot, "shared"),
-            configFile = File(instanceRoot, "config.json"),
+            stagingDir = File(instanceRoot, "staging"),
+            exportDir = File(instanceRoot, "export"),
+            configFile = File(configDir, "vm_config.json"),
+            imageManifestFile = File(configDir, "image_manifest.json"),
         )
         paths.create()
         return paths
@@ -33,17 +41,28 @@ class PathLayout(context: Context) {
 data class InstancePaths(
     val id: String,
     val root: File,
+    val configDir: File,
+    val rootfsDir: File,
     val dataDir: File,
+    val cacheDir: File,
     val logsDir: File,
     val runtimeDir: File,
     val sharedDir: File,
+    val stagingDir: File,
+    val exportDir: File,
     val configFile: File,
+    val imageManifestFile: File,
 ) {
     fun create() {
         root.mkdirs()
+        configDir.mkdirs()
+        rootfsDir.mkdirs()
         dataDir.mkdirs()
+        cacheDir.mkdirs()
         logsDir.mkdirs()
         runtimeDir.mkdirs()
         sharedDir.mkdirs()
+        stagingDir.mkdirs()
+        exportDir.mkdirs()
     }
 }

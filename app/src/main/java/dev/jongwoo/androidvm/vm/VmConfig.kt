@@ -31,10 +31,15 @@ data class VmConfig(
         .put(
             "paths",
             JSONObject()
-                .put("root", paths.root)
+                .put("rootfsPath", paths.rootfsPath)
                 .put("dataDir", paths.dataDir)
+                .put("cacheDir", paths.cacheDir)
                 .put("runtimeDir", paths.runtimeDir)
-                .put("sharedDir", paths.sharedDir),
+                .put("sharedDir", paths.sharedDir)
+                .put("logsDir", paths.logsDir)
+                .put("stagingDir", paths.stagingDir)
+                .put("configFile", paths.configFile)
+                .put("imageManifestFile", paths.imageManifestFile),
         )
         .put("bridgePolicy", bridgePolicy.toJson())
         .toString(2)
@@ -56,10 +61,15 @@ data class VmConfig(
                 densityDpi = 320,
             ),
             paths = GuestPathConfig(
-                root = paths.root.absolutePath,
+                rootfsPath = paths.rootfsDir.absolutePath,
                 dataDir = paths.dataDir.absolutePath,
+                cacheDir = paths.cacheDir.absolutePath,
                 runtimeDir = paths.runtimeDir.absolutePath,
                 sharedDir = paths.sharedDir.absolutePath,
+                logsDir = paths.logsDir.absolutePath,
+                stagingDir = paths.stagingDir.absolutePath,
+                configFile = paths.configFile.absolutePath,
+                imageManifestFile = paths.imageManifestFile.absolutePath,
             ),
         )
     }
@@ -79,8 +89,13 @@ data class DisplayConfig(
 )
 
 data class GuestPathConfig(
-    val root: String,
+    val rootfsPath: String,
     val dataDir: String,
+    val cacheDir: String,
     val runtimeDir: String,
     val sharedDir: String,
+    val logsDir: String,
+    val stagingDir: String,
+    val configFile: String,
+    val imageManifestFile: String,
 )
