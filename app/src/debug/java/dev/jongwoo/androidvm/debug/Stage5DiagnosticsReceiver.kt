@@ -33,12 +33,14 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
 
         val graphicsPassed = runGraphicsDiagnostics(config.instanceId)
         val graphicsDevicePassed = runGraphicsDeviceDiagnostics(config.instanceId)
+        val graphicsAccelerationPassed = runGraphicsAccelerationDiagnostics(config.instanceId)
         val inputPassed = runInputDiagnostics(config.instanceId)
         val audioPassed = runAudioDiagnostics(config.instanceId)
         val lifecyclePassed = runLifecycleDiagnostics(config.instanceId)
         val stressPassed = runLifecycleStressDiagnostics(config.instanceId)
         val passed = graphicsPassed &&
             graphicsDevicePassed &&
+            graphicsAccelerationPassed &&
             inputPassed &&
             audioPassed &&
             lifecyclePassed &&
@@ -46,7 +48,8 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
 
         Log.i(
             TAG,
-            "STAGE5_RESULT passed=$passed graphics=$graphicsPassed graphicsDevice=$graphicsDevicePassed input=$inputPassed " +
+            "STAGE5_RESULT passed=$passed graphics=$graphicsPassed graphicsDevice=$graphicsDevicePassed " +
+                "graphicsAcceleration=$graphicsAccelerationPassed input=$inputPassed " +
                 "audio=$audioPassed lifecycle=$lifecyclePassed stress=$stressPassed",
         )
     }
@@ -161,6 +164,28 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
                 "committed=${statsAfterCompose.optInt("graphicsCommittedBuffers")} " +
                 "status=${statsAfterCompose.optString("graphicsDeviceStatus")} " +
                 "source=${statsAfterCompose.optString("framebufferSource")}",
+        )
+        return passed
+    }
+
+    private fun runGraphicsAccelerationDiagnostics(instanceId: String): Boolean {
+        val stats = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
+        val passed = stats.optString("graphicsAccelerationMode") == "software_framebuffer" &&
+            !stats.optBoolean("glesPassthroughReady", true) &&
+            !stats.optBoolean("virglReady", true) &&
+            !stats.optBoolean("venusReady", true) &&
+            stats.optInt("graphicsCommittedBuffers") >= 1 &&
+            stats.optString("framebufferSource") == "hwcomposer"
+
+        Log.i(
+            TAG,
+            "STAGE5_GRAPHICS_ACCELERATION_RESULT passed=$passed " +
+                "mode=${stats.optString("graphicsAccelerationMode")} " +
+                "gles=${stats.optBoolean("glesPassthroughReady")} " +
+                "virgl=${stats.optBoolean("virglReady")} " +
+                "venus=${stats.optBoolean("venusReady")} " +
+                "committed=${stats.optInt("graphicsCommittedBuffers")} " +
+                "source=${stats.optString("framebufferSource")}",
         )
         return passed
     }

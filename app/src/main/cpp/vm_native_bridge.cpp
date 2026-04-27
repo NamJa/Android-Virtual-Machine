@@ -151,9 +151,13 @@ struct Instance {
     int audioFramesWritten = 0;
     int audioLastFramesWritten = 0;
     int audioChannels = 2;
+    std::string graphicsAccelerationMode = "software_framebuffer";
     std::string lastGraphicsBufferFormat = "RGBA_8888";
     std::string graphicsDeviceStatus = "not_started";
     std::string audioOutputStatus = "not_started";
+    bool glesPassthroughReady = false;
+    bool virglReady = false;
+    bool venusReady = false;
     bool framebufferDirty = false;
     bool audioMuted = false;
     ANativeWindow* window = nullptr;
@@ -1343,8 +1347,12 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->lastGraphicsBufferUsage = 0;
         instance->lastComposerBufferId = 0;
         instance->lastComposerLayers = 0;
+        instance->graphicsAccelerationMode = "software_framebuffer";
         instance->lastGraphicsBufferFormat = "RGBA_8888";
         instance->graphicsDeviceStatus = "not_started";
+        instance->glesPassthroughReady = false;
+        instance->virglReady = false;
+        instance->venusReady = false;
         instance->frame = 0;
         writeFramebufferPatternLocked(*instance, instance->frame++, "initial_test_pattern");
         instance->binderServices.clear();
@@ -1635,6 +1643,10 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
              << "\"graphicsCommittedBuffers\":" << instance->graphicsCommittedBuffers << ","
              << "\"lastComposerBufferId\":" << instance->lastComposerBufferId << ","
              << "\"lastComposerLayers\":" << instance->lastComposerLayers << ","
+             << "\"graphicsAccelerationMode\":\"" << escapeJson(instance->graphicsAccelerationMode) << "\","
+             << "\"glesPassthroughReady\":" << (instance->glesPassthroughReady ? "true" : "false") << ","
+             << "\"virglReady\":" << (instance->virglReady ? "true" : "false") << ","
+             << "\"venusReady\":" << (instance->venusReady ? "true" : "false") << ","
              << "\"graphicsDeviceStatus\":\"" << escapeJson(instance->graphicsDeviceStatus) << "\","
              << "\"dirty\":" << (instance->framebufferDirty ? "true" : "false") << ","
              << "\"dirtyLeft\":" << instance->framebufferDirtyRect.left << ","
