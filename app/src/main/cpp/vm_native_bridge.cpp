@@ -87,6 +87,7 @@ struct Instance {
     std::map<std::string, std::string> properties;
     std::map<std::string, int> binderServices;
     std::string bootstrapStatus;
+    std::string framebufferSource = "empty";
     std::vector<uint32_t> framebuffer;
     std::vector<GuestInputEvent> inputQueue;
     int nextFd = 1000;
@@ -571,7 +572,7 @@ uint32_t framebufferColorFor(int x, int y, int width, int height, uint32_t frame
            (static_cast<uint32_t>(g) << 8u) | static_cast<uint32_t>(r);
 }
 
-void writeFramebufferPatternLocked(Instance& instance, uint32_t frame) {
+void writeFramebufferPatternLocked(Instance& instance, uint32_t frame, const std::string& source) {
     ensureFramebufferLocked(instance);
     for (int y = 0; y < instance.framebufferHeight; ++y) {
         for (int x = 0; x < instance.framebufferWidth; ++x) {
@@ -579,6 +580,7 @@ void writeFramebufferPatternLocked(Instance& instance, uint32_t frame) {
                 framebufferColorFor(x, y, instance.framebufferWidth, instance.framebufferHeight, frame);
         }
     }
+    instance.framebufferSource = source;
     instance.framebufferFrames++;
     instance.framebufferDirty = true;
 }
@@ -643,7 +645,7 @@ int parseNamedPositiveInt(const std::string& payload, const std::string& name, i
 void handleVirtualDeviceWriteLocked(Instance& instance, const OpenFile& openFile, const std::string& payload) {
     if (openFile.guestPath == "/dev/graphics/fb0" || openFile.guestPath == "/dev/fb0") {
         const int frame = parseNamedPositiveInt(payload, "frame", static_cast<int>(instance.frame));
-        writeFramebufferPatternLocked(instance, static_cast<uint32_t>(frame));
+        writeFramebufferPatternLocked(instance, static_cast<uint32_t>(frame), "guest_fb0");
         return;
     }
     if (openFile.guestPath == "/dev/snd/pcmC0D0p") {
@@ -812,7 +814,7 @@ void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
     int64_t nextCopies = 0;
     {
         std::lock_guard<std::mutex> guard(instance.lock);
-        writeFramebufferPatternLocked(instance, instance.frame++);
+        ensureFramebufferLocked(instance);
         framebuffer = instance.framebuffer;
         framebufferWidth = instance.framebufferWidth;
         framebufferHeight = instance.framebufferHeight;
@@ -972,7 +974,10 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->framebufferWidth = displayWidth > 0 ? displayWidth : 720;
         instance->framebufferHeight = displayHeight > 0 ? displayHeight : 1280;
         instance->framebuffer.clear();
-        ensureFramebufferLocked(*instance);
+        instance->framebufferFrames = 0;
+        instance->surfaceCopies = 0;
+        instance->frame = 0;
+        writeFramebufferPatternLocked(*instance, instance->frame++, "initial_test_pattern");
         instance->binderServices.clear();
         instance->bootstrapStatus.clear();
         instance->nextBinderHandle = 1;
@@ -1204,7 +1209,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_writeFramebufferTestPattern(
     }
     {
         std::lock_guard<std::mutex> guard(instance->lock);
-        writeFramebufferPatternLocked(*instance, static_cast<uint32_t>(frameIndex));
+        writeFramebufferPatternLocked(*instance, static_cast<uint32_t>(frameIndex), "diagnostic_test_pattern");
     }
     appendInstanceLog(instance, "framebuffer test pattern frame=" + std::to_string(frameIndex));
     return kOk;
@@ -1243,6 +1248,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
              << "\"framebufferFrames\":" << instance->framebufferFrames << ","
              << "\"surfaceCopies\":" << instance->surfaceCopies << ","
              << "\"dirty\":" << (instance->framebufferDirty ? "true" : "false") << ","
+             << "\"framebufferSource\":\"" << escapeJson(instance->framebufferSource) << "\","
              << "\"surfaceAttached\":" << (instance->window != nullptr ? "true" : "false") << ","
              << "\"renderRunning\":" << (renderRunning ? "true" : "false")
              << "}";
