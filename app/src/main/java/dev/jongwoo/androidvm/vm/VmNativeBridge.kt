@@ -29,6 +29,21 @@ object VmNativeBridge {
     external fun getLastError(instanceId: String): String
 
     @JvmStatic
+    external fun getInstanceLogPath(instanceId: String): String
+
+    @JvmStatic
+    external fun getGuestProperty(instanceId: String, key: String, fallback: String): String
+
+    @JvmStatic
+    external fun setGuestPropertyOverride(instanceId: String, key: String, value: String): Int
+
+    @JvmStatic
+    external fun getBinderServiceHandle(instanceId: String, serviceName: String): Int
+
+    @JvmStatic
+    external fun getBootstrapStatus(instanceId: String): String
+
+    @JvmStatic
     external fun resolveGuestPath(instanceId: String, guestPath: String, writeAccess: Boolean): String
 
     fun resolveGuestPathResult(
@@ -38,6 +53,21 @@ object VmNativeBridge {
     ): GuestPathResolution = GuestPathResolution.fromJson(
         resolveGuestPath(instanceId, guestPath, writeAccess),
     )
+
+    @JvmStatic
+    external fun openGuestPath(instanceId: String, guestPath: String, writeAccess: Boolean): Int
+
+    @JvmStatic
+    external fun readGuestFile(instanceId: String, fd: Int, maxBytes: Int): String
+
+    @JvmStatic
+    external fun writeGuestFile(instanceId: String, fd: Int, data: String): Int
+
+    @JvmStatic
+    external fun closeGuestFile(instanceId: String, fd: Int): Int
+
+    @JvmStatic
+    external fun getOpenFdCount(instanceId: String): Int
 
     @JvmStatic
     external fun attachSurface(
