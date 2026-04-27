@@ -32,15 +32,21 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
         VmNativeBridge.initInstance(config.instanceId, config.toJson())
 
         val graphicsPassed = runGraphicsDiagnostics(config.instanceId)
+        val graphicsDevicePassed = runGraphicsDeviceDiagnostics(config.instanceId)
         val inputPassed = runInputDiagnostics(config.instanceId)
         val audioPassed = runAudioDiagnostics(config.instanceId)
         val lifecyclePassed = runLifecycleDiagnostics(config.instanceId)
         val stressPassed = runLifecycleStressDiagnostics(config.instanceId)
-        val passed = graphicsPassed && inputPassed && audioPassed && lifecyclePassed && stressPassed
+        val passed = graphicsPassed &&
+            graphicsDevicePassed &&
+            inputPassed &&
+            audioPassed &&
+            lifecyclePassed &&
+            stressPassed
 
         Log.i(
             TAG,
-            "STAGE5_RESULT passed=$passed graphics=$graphicsPassed input=$inputPassed " +
+            "STAGE5_RESULT passed=$passed graphics=$graphicsPassed graphicsDevice=$graphicsDevicePassed input=$inputPassed " +
                 "audio=$audioPassed lifecycle=$lifecyclePassed stress=$stressPassed",
         )
     }
@@ -97,6 +103,64 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
                 "frames=${stats.optLong("framebufferFrames")} source=${stats.optString("framebufferSource")} " +
                 "dirty=${stats.optBoolean("dirty")} dirtyRect=${stats.optInt("dirtyLeft")}," +
                 "${stats.optInt("dirtyTop")} ${stats.optInt("dirtyWidth")}x${stats.optInt("dirtyHeight")}",
+        )
+        return passed
+    }
+
+    private fun runGraphicsDeviceDiagnostics(instanceId: String): Boolean {
+        VmNativeBridge.setFramebufferRotation(instanceId, 0)
+        val grallocFd = VmNativeBridge.openGuestPath(instanceId, "/dev/gralloc", true)
+        val grallocPayload = "ALLOC width=$GUEST_WIDTH height=$GUEST_HEIGHT format=RGBA_8888 usage=1"
+        val grallocWrite = if (grallocFd > 0) {
+            VmNativeBridge.writeGuestFile(instanceId, grallocFd, grallocPayload)
+        } else {
+            -1
+        }
+        if (grallocFd > 0) VmNativeBridge.closeGuestFile(instanceId, grallocFd)
+        val statsAfterAlloc = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
+        val bufferId = statsAfterAlloc.optInt("lastGraphicsBufferId")
+
+        val hwcFd = VmNativeBridge.openGuestPath(instanceId, "/dev/hwcomposer", true)
+        val hwcPayload = "COMPOSE buffer=$bufferId layers=1 frame=17"
+        val hwcWrite = if (hwcFd > 0) {
+            VmNativeBridge.writeGuestFile(instanceId, hwcFd, hwcPayload)
+        } else {
+            -1
+        }
+        if (hwcFd > 0) VmNativeBridge.closeGuestFile(instanceId, hwcFd)
+        val statsAfterCompose = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
+
+        val allocPassed = grallocFd > 0 &&
+            grallocWrite == grallocPayload.length &&
+            bufferId > 0 &&
+            statsAfterAlloc.optInt("graphicsAllocations") >= 1 &&
+            statsAfterAlloc.optInt("graphicsBuffers") >= 1 &&
+            statsAfterAlloc.optInt("lastGraphicsBufferWidth") == GUEST_WIDTH &&
+            statsAfterAlloc.optInt("lastGraphicsBufferHeight") == GUEST_HEIGHT &&
+            statsAfterAlloc.optString("lastGraphicsBufferFormat") == "RGBA_8888" &&
+            statsAfterAlloc.optString("graphicsDeviceStatus") == "gralloc_allocated"
+
+        val composePassed = hwcFd > 0 &&
+            hwcWrite == hwcPayload.length &&
+            statsAfterCompose.optInt("graphicsCompositions") >= 1 &&
+            statsAfterCompose.optInt("graphicsCommittedBuffers") >= 1 &&
+            statsAfterCompose.optInt("lastComposerBufferId") == bufferId &&
+            statsAfterCompose.optInt("lastComposerLayers") == 1 &&
+            statsAfterCompose.optString("graphicsDeviceStatus") == "committed" &&
+            statsAfterCompose.optString("framebufferSource") == "hwcomposer" &&
+            statsAfterCompose.optBoolean("dirty")
+
+        val passed = allocPassed && composePassed
+        Log.i(
+            TAG,
+            "STAGE5_GRAPHICS_DEVICE_RESULT passed=$passed alloc=$allocPassed compose=$composePassed " +
+                "grallocFd=$grallocFd grallocWrite=$grallocWrite hwcFd=$hwcFd hwcWrite=$hwcWrite " +
+                "buffer=$bufferId allocations=${statsAfterCompose.optInt("graphicsAllocations")} " +
+                "buffers=${statsAfterCompose.optInt("graphicsBuffers")} " +
+                "compositions=${statsAfterCompose.optInt("graphicsCompositions")} " +
+                "committed=${statsAfterCompose.optInt("graphicsCommittedBuffers")} " +
+                "status=${statsAfterCompose.optString("graphicsDeviceStatus")} " +
+                "source=${statsAfterCompose.optString("framebufferSource")}",
         )
         return passed
     }

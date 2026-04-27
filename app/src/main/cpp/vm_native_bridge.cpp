@@ -100,6 +100,15 @@ struct DirtyRect {
     }
 };
 
+struct GraphicsBuffer {
+    int id = 0;
+    int width = 0;
+    int height = 0;
+    std::string format;
+    int usage = 0;
+    int commits = 0;
+};
+
 struct Instance {
     std::mutex lock;
     std::string configJson;
@@ -110,6 +119,7 @@ struct Instance {
     std::string logsDir;
     std::string logPath;
     std::map<int, OpenFile> fdTable;
+    std::map<int, GraphicsBuffer> graphicsBuffers;
     std::map<std::string, std::string> properties;
     std::map<std::string, int> binderServices;
     std::string bootstrapStatus;
@@ -119,18 +129,30 @@ struct Instance {
     DirtyRect framebufferDirtyRect;
     int nextFd = 1000;
     int nextBinderHandle = 1;
+    int nextGraphicsBufferId = 1;
     int framebufferWidth = 720;
     int framebufferHeight = 1280;
     int framebufferRotation = 0;
     int64_t framebufferFrames = 0;
     int64_t surfaceCopies = 0;
     int64_t inputQueueResets = 0;
+    int64_t graphicsAllocations = 0;
+    int64_t graphicsCompositions = 0;
+    int64_t graphicsCommittedBuffers = 0;
+    int lastGraphicsBufferId = 0;
+    int lastGraphicsBufferWidth = 0;
+    int lastGraphicsBufferHeight = 0;
+    int lastGraphicsBufferUsage = 0;
+    int lastComposerBufferId = 0;
+    int lastComposerLayers = 0;
     int audioSampleRate = 48000;
     int audioFramesGenerated = 0;
     int audioOutputAttempts = 0;
     int audioFramesWritten = 0;
     int audioLastFramesWritten = 0;
     int audioChannels = 2;
+    std::string lastGraphicsBufferFormat = "RGBA_8888";
+    std::string graphicsDeviceStatus = "not_started";
     std::string audioOutputStatus = "not_started";
     bool framebufferDirty = false;
     bool audioMuted = false;
@@ -482,6 +504,10 @@ bool isVirtualDevicePath(const std::string& path) {
         path == "/dev/input/event0" ||
         path == "/dev/graphics/fb0" ||
         path == "/dev/fb0" ||
+        path == "/dev/gralloc" ||
+        path == "/dev/graphics/gralloc" ||
+        path == "/dev/hwcomposer" ||
+        path == "/dev/graphics/hwcomposer0" ||
         path == "/dev/snd/pcmC0D0p";
 }
 
@@ -810,10 +836,76 @@ int parseNamedPositiveInt(const std::string& payload, const std::string& name, i
     return parseFirstPositiveInt(payload.substr(keyPosition + name.size()), fallback);
 }
 
+std::string parseNamedToken(const std::string& payload, const std::string& name, const std::string& fallback) {
+    const auto keyPosition = payload.find(name);
+    if (keyPosition == std::string::npos) {
+        return fallback;
+    }
+    auto cursor = keyPosition + name.size();
+    while (cursor < payload.size() && (payload[cursor] == '=' || std::isspace(static_cast<unsigned char>(payload[cursor])))) {
+        ++cursor;
+    }
+    if (cursor >= payload.size()) {
+        return fallback;
+    }
+    auto end = cursor;
+    while (end < payload.size()) {
+        const auto ch = static_cast<unsigned char>(payload[end]);
+        if (std::isspace(ch) || payload[end] == ',' || payload[end] == ';') {
+            break;
+        }
+        ++end;
+    }
+    return end > cursor ? payload.substr(cursor, end - cursor) : fallback;
+}
+
+bool isGrallocPath(const std::string& path) {
+    return path == "/dev/gralloc" || path == "/dev/graphics/gralloc";
+}
+
+bool isHwcomposerPath(const std::string& path) {
+    return path == "/dev/hwcomposer" || path == "/dev/graphics/hwcomposer0";
+}
+
 void handleVirtualDeviceWriteLocked(Instance& instance, const OpenFile& openFile, const std::string& payload) {
     if (openFile.guestPath == "/dev/graphics/fb0" || openFile.guestPath == "/dev/fb0") {
         const int frame = parseNamedPositiveInt(payload, "frame", static_cast<int>(instance.frame));
         writeFramebufferPatternLocked(instance, static_cast<uint32_t>(frame), "guest_fb0");
+        return;
+    }
+    if (isGrallocPath(openFile.guestPath)) {
+        const int width = parseNamedPositiveInt(payload, "width", instance.framebufferWidth);
+        const int height = parseNamedPositiveInt(payload, "height", instance.framebufferHeight);
+        const int usage = parseNamedPositiveInt(payload, "usage", 0);
+        const auto format = parseNamedToken(payload, "format", "RGBA_8888");
+        const int bufferId = instance.nextGraphicsBufferId++;
+        const GraphicsBuffer buffer = {bufferId, width, height, format, usage, 0};
+        instance.graphicsBuffers[bufferId] = buffer;
+        instance.graphicsAllocations++;
+        instance.lastGraphicsBufferId = bufferId;
+        instance.lastGraphicsBufferWidth = width;
+        instance.lastGraphicsBufferHeight = height;
+        instance.lastGraphicsBufferFormat = format;
+        instance.lastGraphicsBufferUsage = usage;
+        instance.graphicsDeviceStatus = "gralloc_allocated";
+        return;
+    }
+    if (isHwcomposerPath(openFile.guestPath)) {
+        const int bufferId = parseNamedPositiveInt(payload, "buffer", instance.lastGraphicsBufferId);
+        const int layers = parseNamedPositiveInt(payload, "layers", 1);
+        const int frame = parseNamedPositiveInt(payload, "frame", static_cast<int>(instance.frame));
+        instance.graphicsCompositions++;
+        instance.lastComposerBufferId = bufferId;
+        instance.lastComposerLayers = layers;
+        auto found = instance.graphicsBuffers.find(bufferId);
+        if (found == instance.graphicsBuffers.end() || layers <= 0) {
+            instance.graphicsDeviceStatus = "compose_rejected";
+            return;
+        }
+        found->second.commits++;
+        instance.graphicsCommittedBuffers++;
+        instance.graphicsDeviceStatus = "committed";
+        writeFramebufferPatternLocked(instance, static_cast<uint32_t>(frame), "hwcomposer");
         return;
     }
     if (openFile.guestPath == "/dev/snd/pcmC0D0p") {
@@ -916,6 +1008,12 @@ std::string virtualNodeContent(const std::string& guestPath) {
     }
     if (guestPath == "/dev/graphics/fb0" || guestPath == "/dev/fb0") {
         return "android-vm-framebuffer format=RGBA_8888 protocol=pattern-command\n";
+    }
+    if (isGrallocPath(guestPath)) {
+        return "android-vm-gralloc protocol=ALLOC width height format usage\n";
+    }
+    if (isHwcomposerPath(guestPath)) {
+        return "android-vm-hwcomposer protocol=COMPOSE buffer layers frame\n";
     }
     if (guestPath == "/dev/snd/pcmC0D0p") {
         return "android-vm-audio-output format=PCM16 channels=2 protocol=tone-command\n";
@@ -1234,6 +1332,19 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->framebufferDirtyRect = {};
         instance->framebufferFrames = 0;
         instance->surfaceCopies = 0;
+        instance->graphicsBuffers.clear();
+        instance->nextGraphicsBufferId = 1;
+        instance->graphicsAllocations = 0;
+        instance->graphicsCompositions = 0;
+        instance->graphicsCommittedBuffers = 0;
+        instance->lastGraphicsBufferId = 0;
+        instance->lastGraphicsBufferWidth = 0;
+        instance->lastGraphicsBufferHeight = 0;
+        instance->lastGraphicsBufferUsage = 0;
+        instance->lastComposerBufferId = 0;
+        instance->lastComposerLayers = 0;
+        instance->lastGraphicsBufferFormat = "RGBA_8888";
+        instance->graphicsDeviceStatus = "not_started";
         instance->frame = 0;
         writeFramebufferPatternLocked(*instance, instance->frame++, "initial_test_pattern");
         instance->binderServices.clear();
@@ -1513,6 +1624,18 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
              << "\"mappingHeight\":" << mapping.height << ","
              << "\"framebufferFrames\":" << instance->framebufferFrames << ","
              << "\"surfaceCopies\":" << instance->surfaceCopies << ","
+             << "\"graphicsAllocations\":" << instance->graphicsAllocations << ","
+             << "\"graphicsBuffers\":" << instance->graphicsBuffers.size() << ","
+             << "\"lastGraphicsBufferId\":" << instance->lastGraphicsBufferId << ","
+             << "\"lastGraphicsBufferWidth\":" << instance->lastGraphicsBufferWidth << ","
+             << "\"lastGraphicsBufferHeight\":" << instance->lastGraphicsBufferHeight << ","
+             << "\"lastGraphicsBufferFormat\":\"" << escapeJson(instance->lastGraphicsBufferFormat) << "\","
+             << "\"lastGraphicsBufferUsage\":" << instance->lastGraphicsBufferUsage << ","
+             << "\"graphicsCompositions\":" << instance->graphicsCompositions << ","
+             << "\"graphicsCommittedBuffers\":" << instance->graphicsCommittedBuffers << ","
+             << "\"lastComposerBufferId\":" << instance->lastComposerBufferId << ","
+             << "\"lastComposerLayers\":" << instance->lastComposerLayers << ","
+             << "\"graphicsDeviceStatus\":\"" << escapeJson(instance->graphicsDeviceStatus) << "\","
              << "\"dirty\":" << (instance->framebufferDirty ? "true" : "false") << ","
              << "\"dirtyLeft\":" << instance->framebufferDirtyRect.left << ","
              << "\"dirtyTop\":" << instance->framebufferDirtyRect.top << ","
