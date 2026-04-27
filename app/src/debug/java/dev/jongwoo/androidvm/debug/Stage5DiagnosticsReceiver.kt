@@ -188,15 +188,23 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
             statsAfterPlay.optInt("sampleRate") == AUDIO_SAMPLE_RATE &&
             statsAfterPlay.optInt("framesGenerated") >= AUDIO_FRAMES * 2 &&
             statsAfterPlay.optInt("channels") == AUDIO_CHANNELS &&
+            statsAfterPlay.optInt("outputAttempts") >= 1 &&
+            statsAfterPlay.optInt("lastFramesWritten") > 0 &&
+            statsAfterPlay.optString("outputStatus") == "ok" &&
             !statsAfterPlay.optBoolean("muted")
 
         val mutedFrames = VmNativeBridge.generateAudioTestTone(instanceId, AUDIO_SAMPLE_RATE, AUDIO_FRAMES, true)
         val statsMuted = JSONObject(VmNativeBridge.getAudioStats(instanceId))
-        val mutePassed = mutedFrames == AUDIO_FRAMES && statsMuted.optBoolean("muted")
+        val mutePassed = mutedFrames == AUDIO_FRAMES &&
+            statsMuted.optBoolean("muted") &&
+            statsMuted.optString("outputStatus") == "muted"
 
         val unmutedFrames = VmNativeBridge.generateAudioTestTone(instanceId, AUDIO_SAMPLE_RATE, AUDIO_FRAMES, false)
         val statsUnmuted = JSONObject(VmNativeBridge.getAudioStats(instanceId))
-        val unmutePassed = unmutedFrames == AUDIO_FRAMES && !statsUnmuted.optBoolean("muted")
+        val unmutePassed = unmutedFrames == AUDIO_FRAMES &&
+            !statsUnmuted.optBoolean("muted") &&
+            statsUnmuted.optInt("lastFramesWritten") > 0 &&
+            statsUnmuted.optString("outputStatus") == "ok"
 
         val passed = playPassed && mutePassed && unmutePassed
 
@@ -204,7 +212,9 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
             TAG,
             "STAGE5_AUDIO_RESULT passed=$passed play=$playPassed mute=$mutePassed unmute=$unmutePassed " +
                 "rate=${statsAfterPlay.optInt("sampleRate")} frames=${statsAfterPlay.optInt("framesGenerated")} " +
-                "channels=${statsAfterPlay.optInt("channels")} mutedAfterToggle=${statsMuted.optBoolean("muted")} " +
+                "channels=${statsAfterPlay.optInt("channels")} attempts=${statsAfterPlay.optInt("outputAttempts")} " +
+                "lastWritten=${statsAfterPlay.optInt("lastFramesWritten")} status=${statsAfterPlay.optString("outputStatus")} " +
+                "mutedAfterToggle=${statsMuted.optBoolean("muted")} mutedStatus=${statsMuted.optString("outputStatus")} " +
                 "framesAfterUnmute=${statsUnmuted.optInt("framesGenerated")}",
         )
         return passed

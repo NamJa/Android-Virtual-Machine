@@ -1,6 +1,7 @@
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#include <aaudio/AAudio.h>
 #include <jni.h>
 
 #include <algorithm>
@@ -74,6 +75,12 @@ struct GuestInputEvent {
     float guestY = 0.0f;
 };
 
+struct AudioOutputResult {
+    bool opened = false;
+    int framesWritten = 0;
+    std::string status;
+};
+
 struct Instance {
     std::mutex lock;
     std::string configJson;
@@ -100,7 +107,11 @@ struct Instance {
     int64_t inputQueueResets = 0;
     int audioSampleRate = 48000;
     int audioFramesGenerated = 0;
+    int audioOutputAttempts = 0;
+    int audioFramesWritten = 0;
+    int audioLastFramesWritten = 0;
     int audioChannels = 2;
+    std::string audioOutputStatus = "not_started";
     bool framebufferDirty = false;
     bool audioMuted = false;
     ANativeWindow* window = nullptr;
@@ -761,6 +772,79 @@ void handleVirtualDeviceWriteLocked(Instance& instance, const OpenFile& openFile
         instance.audioFramesGenerated += frames;
         instance.audioMuted = payload.find("muted=true") != std::string::npos;
     }
+}
+
+AudioOutputResult playToneToAAudio(int sampleRate, int frames, bool muted) {
+    if (muted) {
+        return {false, 0, "muted"};
+    }
+
+    AAudioStreamBuilder* builder = nullptr;
+    aaudio_result_t result = AAudio_createStreamBuilder(&builder);
+    if (result != AAUDIO_OK || builder == nullptr) {
+        return {false, 0, AAudio_convertResultToText(result)};
+    }
+
+    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setSampleRate(builder, sampleRate);
+    AAudioStreamBuilder_setChannelCount(builder, 2);
+    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+
+    AAudioStream* stream = nullptr;
+    result = AAudioStreamBuilder_openStream(builder, &stream);
+    AAudioStreamBuilder_delete(builder);
+    if (result != AAUDIO_OK || stream == nullptr) {
+        return {false, 0, AAudio_convertResultToText(result)};
+    }
+
+    result = AAudioStream_requestStart(stream);
+    if (result != AAUDIO_OK) {
+        const std::string status = AAudio_convertResultToText(result);
+        AAudioStream_close(stream);
+        return {true, 0, status};
+    }
+
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kToneHz = 440.0;
+    constexpr int kChunkFrames = 256;
+    constexpr int kChannels = 2;
+    constexpr int16_t kAmplitude = 4096;
+    constexpr int64_t kTimeoutNanos = 100000000;
+
+    std::vector<int16_t> buffer(static_cast<std::size_t>(kChunkFrames * kChannels));
+    double phase = 0.0;
+    const double phaseStep = 2.0 * kPi * kToneHz / static_cast<double>(sampleRate);
+    int framesWritten = 0;
+    std::string status = "ok";
+    while (framesWritten < frames) {
+        const int framesThisChunk = std::min(kChunkFrames, frames - framesWritten);
+        for (int frameIndex = 0; frameIndex < framesThisChunk; ++frameIndex) {
+            const auto sample = static_cast<int16_t>(std::sin(phase) * static_cast<double>(kAmplitude));
+            buffer[static_cast<std::size_t>(frameIndex * kChannels)] = sample;
+            buffer[static_cast<std::size_t>(frameIndex * kChannels + 1)] = sample;
+            phase += phaseStep;
+            if (phase >= 2.0 * kPi) {
+                phase -= 2.0 * kPi;
+            }
+        }
+
+        const auto writeResult = AAudioStream_write(stream, buffer.data(), framesThisChunk, kTimeoutNanos);
+        if (writeResult < 0) {
+            status = AAudio_convertResultToText(static_cast<aaudio_result_t>(writeResult));
+            break;
+        }
+        if (writeResult == 0) {
+            status = "write_timeout";
+            break;
+        }
+        framesWritten += static_cast<int>(writeResult);
+    }
+
+    AAudioStream_requestStop(stream);
+    AAudioStream_close(stream);
+    return {true, framesWritten, status};
 }
 
 std::string virtualNodeContent(const std::string& guestPath) {
@@ -1476,13 +1560,23 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_generateAudioTestTone(
     if (!instance || sampleRate <= 0 || frames <= 0) {
         return kInvalidInstance;
     }
+    const auto output = playToneToAAudio(sampleRate, frames, muted == JNI_TRUE);
     {
         std::lock_guard<std::mutex> guard(instance->lock);
         instance->audioSampleRate = sampleRate;
         instance->audioFramesGenerated += frames;
         instance->audioMuted = muted == JNI_TRUE;
+        instance->audioOutputAttempts++;
+        instance->audioFramesWritten += output.framesWritten;
+        instance->audioLastFramesWritten = output.framesWritten;
+        instance->audioOutputStatus = output.status;
     }
-    appendInstanceLog(instance, "audio test tone frames=" + std::to_string(frames));
+    appendInstanceLog(
+        instance,
+        "audio test tone frames=" + std::to_string(frames) +
+            " written=" + std::to_string(output.framesWritten) +
+            " status=" + output.status
+    );
     return frames;
 }
 
@@ -1503,8 +1597,12 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getAudioStats(
         json << "{"
              << "\"sampleRate\":" << instance->audioSampleRate << ","
              << "\"framesGenerated\":" << instance->audioFramesGenerated << ","
+             << "\"outputAttempts\":" << instance->audioOutputAttempts << ","
+             << "\"framesWritten\":" << instance->audioFramesWritten << ","
+             << "\"lastFramesWritten\":" << instance->audioLastFramesWritten << ","
              << "\"channels\":" << instance->audioChannels << ","
-             << "\"muted\":" << (instance->audioMuted ? "true" : "false")
+             << "\"muted\":" << (instance->audioMuted ? "true" : "false") << ","
+             << "\"outputStatus\":\"" << escapeJson(instance->audioOutputStatus) << "\""
              << "}";
     }
     const auto result = json.str();
