@@ -79,6 +79,10 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
             fbWrite == "frame=11".length &&
             stats.optLong("framebufferFrames") >= 3L &&
             stats.optString("framebufferSource") == "guest_fb0" &&
+            stats.optInt("dirtyLeft") == 0 &&
+            stats.optInt("dirtyTop") == 0 &&
+            stats.optInt("dirtyWidth") == GUEST_WIDTH &&
+            stats.optInt("dirtyHeight") == GUEST_HEIGHT &&
             stats.optBoolean("dirty")
 
         Log.i(
@@ -90,7 +94,8 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
                 "surface=${stats.optInt("surfaceWidth")}x${stats.optInt("surfaceHeight")} " +
                 "mapping=$mappingLeft,$mappingTop ${mappingWidth}x$mappingHeight " +
                 "frames=${stats.optLong("framebufferFrames")} source=${stats.optString("framebufferSource")} " +
-                "dirty=${stats.optBoolean("dirty")}",
+                "dirty=${stats.optBoolean("dirty")} dirtyRect=${stats.optInt("dirtyLeft")}," +
+                "${stats.optInt("dirtyTop")} ${stats.optInt("dirtyWidth")}x${stats.optInt("dirtyHeight")}",
         )
         return passed
     }

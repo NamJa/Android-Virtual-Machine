@@ -81,6 +81,25 @@ struct AudioOutputResult {
     std::string status;
 };
 
+struct DirtyRect {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+
+    bool empty() const {
+        return right <= left || bottom <= top;
+    }
+
+    int width() const {
+        return empty() ? 0 : right - left;
+    }
+
+    int height() const {
+        return empty() ? 0 : bottom - top;
+    }
+};
+
 struct Instance {
     std::mutex lock;
     std::string configJson;
@@ -97,6 +116,7 @@ struct Instance {
     std::string framebufferSource = "empty";
     std::vector<uint32_t> framebuffer;
     std::vector<GuestInputEvent> inputQueue;
+    DirtyRect framebufferDirtyRect;
     int nextFd = 1000;
     int nextBinderHandle = 1;
     int framebufferWidth = 720;
@@ -661,8 +681,39 @@ void ensureFramebufferLocked(Instance& instance) {
     const auto requiredSize = static_cast<std::size_t>(instance.framebufferWidth * instance.framebufferHeight);
     if (instance.framebuffer.size() != requiredSize) {
         instance.framebuffer.assign(requiredSize, 0xFF101010u);
+        instance.framebufferDirtyRect = {0, 0, instance.framebufferWidth, instance.framebufferHeight};
         instance.framebufferDirty = true;
     }
+}
+
+void markFramebufferDirtyLocked(Instance& instance, int left, int top, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    const int clampedLeft = clampValue(left, 0, instance.framebufferWidth);
+    const int clampedTop = clampValue(top, 0, instance.framebufferHeight);
+    const int clampedRight = clampValue(left + width, 0, instance.framebufferWidth);
+    const int clampedBottom = clampValue(top + height, 0, instance.framebufferHeight);
+    if (clampedRight <= clampedLeft || clampedBottom <= clampedTop) {
+        return;
+    }
+    const DirtyRect next = {clampedLeft, clampedTop, clampedRight, clampedBottom};
+    if (instance.framebufferDirtyRect.empty()) {
+        instance.framebufferDirtyRect = next;
+    } else {
+        instance.framebufferDirtyRect = {
+            std::min(instance.framebufferDirtyRect.left, next.left),
+            std::min(instance.framebufferDirtyRect.top, next.top),
+            std::max(instance.framebufferDirtyRect.right, next.right),
+            std::max(instance.framebufferDirtyRect.bottom, next.bottom),
+        };
+    }
+    instance.framebufferDirty = true;
+}
+
+void clearFramebufferDirtyLocked(Instance& instance) {
+    instance.framebufferDirtyRect = {};
+    instance.framebufferDirty = false;
 }
 
 uint32_t framebufferColorFor(int x, int y, int width, int height, uint32_t frame) {
@@ -683,7 +734,7 @@ void writeFramebufferPatternLocked(Instance& instance, uint32_t frame, const std
     }
     instance.framebufferSource = source;
     instance.framebufferFrames++;
-    instance.framebufferDirty = true;
+    markFramebufferDirtyLocked(instance, 0, 0, instance.framebufferWidth, instance.framebufferHeight);
 }
 
 GuestInputEvent mapTouchEventLocked(
@@ -1011,7 +1062,7 @@ void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
         framebufferHeight = instance.framebufferHeight;
         framebufferRotation = instance.framebufferRotation;
         nextCopies = ++instance.surfaceCopies;
-        instance.framebufferDirty = false;
+        clearFramebufferDirtyLocked(instance);
     }
 
     const auto oriented = orientedFramebufferDimensions(framebufferWidth, framebufferHeight, framebufferRotation);
@@ -1180,6 +1231,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->framebufferHeight = displayHeight > 0 ? displayHeight : 1280;
         instance->framebufferRotation = 0;
         instance->framebuffer.clear();
+        instance->framebufferDirtyRect = {};
         instance->framebufferFrames = 0;
         instance->surfaceCopies = 0;
         instance->frame = 0;
@@ -1462,6 +1514,10 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
              << "\"framebufferFrames\":" << instance->framebufferFrames << ","
              << "\"surfaceCopies\":" << instance->surfaceCopies << ","
              << "\"dirty\":" << (instance->framebufferDirty ? "true" : "false") << ","
+             << "\"dirtyLeft\":" << instance->framebufferDirtyRect.left << ","
+             << "\"dirtyTop\":" << instance->framebufferDirtyRect.top << ","
+             << "\"dirtyWidth\":" << instance->framebufferDirtyRect.width() << ","
+             << "\"dirtyHeight\":" << instance->framebufferDirtyRect.height() << ","
              << "\"framebufferSource\":\"" << escapeJson(instance->framebufferSource) << "\","
              << "\"surfaceAttached\":" << (instance->window != nullptr ? "true" : "false") << ","
              << "\"renderRunning\":" << (renderRunning ? "true" : "false")
@@ -1486,7 +1542,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_setFramebufferRotation(
     {
         std::lock_guard<std::mutex> guard(instance->lock);
         instance->framebufferRotation = normalizeRotation(rotationDegrees);
-        instance->framebufferDirty = true;
+        markFramebufferDirtyLocked(*instance, 0, 0, instance->framebufferWidth, instance->framebufferHeight);
     }
     appendInstanceLog(instance, "framebuffer rotation=" + std::to_string(normalizeRotation(rotationDegrees)));
     return kOk;
