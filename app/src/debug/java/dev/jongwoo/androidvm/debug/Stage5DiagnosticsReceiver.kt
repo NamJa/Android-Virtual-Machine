@@ -35,12 +35,13 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
         val inputPassed = runInputDiagnostics(config.instanceId)
         val audioPassed = runAudioDiagnostics(config.instanceId)
         val lifecyclePassed = runLifecycleDiagnostics(config.instanceId)
-        val passed = graphicsPassed && inputPassed && audioPassed && lifecyclePassed
+        val stressPassed = runLifecycleStressDiagnostics(config.instanceId)
+        val passed = graphicsPassed && inputPassed && audioPassed && lifecyclePassed && stressPassed
 
         Log.i(
             TAG,
             "STAGE5_RESULT passed=$passed graphics=$graphicsPassed input=$inputPassed " +
-                "audio=$audioPassed lifecycle=$lifecyclePassed",
+                "audio=$audioPassed lifecycle=$lifecyclePassed stress=$stressPassed",
         )
     }
 
@@ -283,6 +284,54 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
                 "rotation=${statsAfterRotate.optInt("framebufferRotation")} " +
                 "rotatedGuest=${inputAfterRotate.optDouble("lastGuestX")},${inputAfterRotate.optDouble("lastGuestY")}",
         )
+        return passed
+    }
+
+    private fun runLifecycleStressDiagnostics(instanceId: String): Boolean {
+        var passed = true
+        var cycles = 0
+        var lastSurface = ""
+        val rotations = intArrayOf(0, 90, 180, 270)
+        rotations.forEachIndexed { index, rotation ->
+            val start = VmNativeBridge.startGuest(instanceId)
+            val rotationSet = VmNativeBridge.setFramebufferRotation(instanceId, rotation)
+            val surfaceWidth = if (rotation == 90 || rotation == 270) HOST_HEIGHT else HOST_WIDTH
+            val surfaceHeight = if (rotation == 90 || rotation == 270) HOST_WIDTH else HOST_HEIGHT
+            val resize = VmNativeBridge.resizeSurface(instanceId, surfaceWidth, surfaceHeight, HOST_DENSITY_DPI)
+            val touch = VmNativeBridge.sendTouch(
+                instanceId,
+                MotionEvent.ACTION_MOVE,
+                index,
+                surfaceWidth / 2f,
+                surfaceHeight / 2f,
+            )
+            val reset = VmNativeBridge.resetInputQueue(instanceId)
+            val stop = VmNativeBridge.stopGuest(instanceId)
+            val detach = VmNativeBridge.detachSurface(instanceId)
+            val graphics = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
+            val input = JSONObject(VmNativeBridge.getInputStats(instanceId))
+            val cyclePassed = start == 0 &&
+                rotationSet == 0 &&
+                resize == 0 &&
+                touch == 0 &&
+                reset == 0 &&
+                stop == 0 &&
+                detach == 0 &&
+                !graphics.optBoolean("surfaceAttached", true) &&
+                !graphics.optBoolean("renderRunning", true) &&
+                input.optInt("queueSize") == 0
+            passed = passed && cyclePassed
+            cycles++
+            lastSurface = "${graphics.optInt("surfaceWidth")}x${graphics.optInt("surfaceHeight")}"
+            Log.i(
+                TAG,
+                "STAGE5_STRESS_CASE passed=$cyclePassed rotation=$rotation start=$start resize=$resize " +
+                    "touch=$touch reset=$reset stop=$stop detach=$detach surface=$lastSurface " +
+                    "renderRunning=${graphics.optBoolean("renderRunning")} queue=${input.optInt("queueSize")}",
+            )
+        }
+        VmNativeBridge.setFramebufferRotation(instanceId, 0)
+        Log.i(TAG, "STAGE5_STRESS_RESULT passed=$passed cycles=$cycles lastSurface=$lastSurface")
         return passed
     }
 
