@@ -11,7 +11,6 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import dev.jongwoo.androidvm.R
-import dev.jongwoo.androidvm.storage.InstanceStore
 
 class VmInstanceService : Service() {
     private val binder = LocalBinder()
@@ -44,7 +43,21 @@ class VmInstanceService : Service() {
         state = VmState.STARTING
         startForegroundCompat()
 
-        val config = InstanceStore(this).ensureDefaultConfig()
+        val preflight = RuntimePreflightCheck.run(this)
+        if (preflight is RuntimePreflightResult.Blocked) {
+            state = VmState.ERROR
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
+        val config = preflight.config
+        val nativeState = NativeRuntimeState.fromCode(VmNativeBridge.getInstanceState(config.instanceId))
+        if (nativeState == NativeRuntimeState.RUNNING) {
+            state = VmState.RUNNING
+            return
+        }
+
         val initResult = VmNativeBridge.initHost(
             filesDir.absolutePath,
             applicationInfo.nativeLibraryDir,
@@ -55,6 +68,7 @@ class VmInstanceService : Service() {
         state = if (initResult == 0 && instanceResult == 0 && startResult == 0) {
             VmState.RUNNING
         } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             VmState.ERROR
         }
     }

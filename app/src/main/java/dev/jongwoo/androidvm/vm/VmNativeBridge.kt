@@ -20,6 +20,26 @@ object VmNativeBridge {
     external fun stopGuest(instanceId: String): Int
 
     @JvmStatic
+    external fun destroyInstance(instanceId: String): Int
+
+    @JvmStatic
+    external fun getInstanceState(instanceId: String): Int
+
+    @JvmStatic
+    external fun getLastError(instanceId: String): String
+
+    @JvmStatic
+    external fun resolveGuestPath(instanceId: String, guestPath: String, writeAccess: Boolean): String
+
+    fun resolveGuestPathResult(
+        instanceId: String,
+        guestPath: String,
+        writeAccess: Boolean,
+    ): GuestPathResolution = GuestPathResolution.fromJson(
+        resolveGuestPath(instanceId, guestPath, writeAccess),
+    )
+
+    @JvmStatic
     external fun attachSurface(
         instanceId: String,
         surface: Surface,

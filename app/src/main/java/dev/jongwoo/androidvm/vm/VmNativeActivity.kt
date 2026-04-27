@@ -14,7 +14,6 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import dev.jongwoo.androidvm.R
-import dev.jongwoo.androidvm.storage.InstanceStore
 
 class VmNativeActivity : Activity(), SurfaceHolder.Callback {
     private val instanceId = VmConfig.DEFAULT_INSTANCE_ID
@@ -27,14 +26,22 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         densityDpi = resources.displayMetrics.densityDpi
 
-        val config = InstanceStore(this).ensureDefaultConfig()
+        val preflight = RuntimePreflightCheck.run(this)
+        if (preflight is RuntimePreflightResult.Blocked) {
+            setContentView(createBlockedView(preflight.message))
+            return
+        }
+
+        val config = preflight.config
         VmNativeBridge.initHost(
             filesDir.absolutePath,
             applicationInfo.nativeLibraryDir,
             Build.VERSION.SDK_INT,
         )
-        VmNativeBridge.initInstance(config.instanceId, config.toJson())
-        VmNativeBridge.startGuest(config.instanceId)
+        val nativeState = NativeRuntimeState.fromCode(VmNativeBridge.getInstanceState(config.instanceId))
+        if (nativeState != NativeRuntimeState.RUNNING) {
+            VmNativeBridge.initInstance(config.instanceId, config.toJson())
+        }
         VmInstanceService.start(this)
 
         surfaceView = VmSurfaceView(this).apply {
@@ -48,7 +55,9 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
-        surfaceView.requestFocus()
+        if (::surfaceView.isInitialized) {
+            surfaceView.requestFocus()
+        }
     }
 
     override fun onDestroy() {
@@ -101,6 +110,14 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
             ),
         )
         return root
+    }
+
+    private fun createBlockedView(message: String): TextView = TextView(this).apply {
+        text = getString(R.string.vm_runtime_blocked, message)
+        gravity = Gravity.CENTER
+        setPadding(48, 48, 48, 48)
+        setTextColor(0xFFFFFFFF.toInt())
+        setBackgroundColor(0xFF111111.toInt())
     }
 
     private fun attachOrResize(holder: SurfaceHolder, width: Int = surfaceView.width, height: Int = surfaceView.height) {

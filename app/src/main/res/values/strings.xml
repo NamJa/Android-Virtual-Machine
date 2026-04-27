@@ -5,4 +5,5 @@
     <string name="vm_notification_title">Android VM runtime</string>
     <string name="vm_notification_body">The guest runtime process is active.</string>
     <string name="vm_display_label">VM display</string>
+    <string name="vm_runtime_blocked">VM runtime unavailable\n%1$s</string>
 </resources>
