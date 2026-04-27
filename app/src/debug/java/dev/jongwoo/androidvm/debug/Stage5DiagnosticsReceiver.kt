@@ -45,6 +45,7 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
     }
 
     private fun runGraphicsDiagnostics(instanceId: String): Boolean {
+        val rotationReset = VmNativeBridge.setFramebufferRotation(instanceId, 0)
         val resizeResult = VmNativeBridge.resizeSurface(instanceId, HOST_WIDTH, HOST_HEIGHT, HOST_DENSITY_DPI)
         val patternResult = VmNativeBridge.writeFramebufferTestPattern(instanceId, 7)
         val fbFd = VmNativeBridge.openGuestPath(instanceId, "/dev/graphics/fb0", true)
@@ -60,10 +61,14 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
         val mappingWidth = stats.optInt("mappingWidth")
         val mappingHeight = stats.optInt("mappingHeight")
 
-        val passed = resizeResult == 0 &&
+        val passed = rotationReset == 0 &&
+            resizeResult == 0 &&
             patternResult == 0 &&
             stats.optInt("framebufferWidth") == GUEST_WIDTH &&
             stats.optInt("framebufferHeight") == GUEST_HEIGHT &&
+            stats.optInt("framebufferRotation") == 0 &&
+            stats.optInt("orientedWidth") == GUEST_WIDTH &&
+            stats.optInt("orientedHeight") == GUEST_HEIGHT &&
             stats.optInt("surfaceWidth") == HOST_WIDTH &&
             stats.optInt("surfaceHeight") == HOST_HEIGHT &&
             mappingLeft == 0 &&
@@ -78,8 +83,10 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
 
         Log.i(
             TAG,
-            "STAGE5_GRAPHICS_RESULT passed=$passed resize=$resizeResult pattern=$patternResult fbFd=$fbFd fbWrite=$fbWrite " +
+            "STAGE5_GRAPHICS_RESULT passed=$passed rotationReset=$rotationReset resize=$resizeResult " +
+                "pattern=$patternResult fbFd=$fbFd fbWrite=$fbWrite " +
                 "fb=${stats.optInt("framebufferWidth")}x${stats.optInt("framebufferHeight")} " +
+                "rotation=${stats.optInt("framebufferRotation")} oriented=${stats.optInt("orientedWidth")}x${stats.optInt("orientedHeight")} " +
                 "surface=${stats.optInt("surfaceWidth")}x${stats.optInt("surfaceHeight")} " +
                 "mapping=$mappingLeft,$mappingTop ${mappingWidth}x$mappingHeight " +
                 "frames=${stats.optLong("framebufferFrames")} source=${stats.optString("framebufferSource")} " +
@@ -89,6 +96,7 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
     }
 
     private fun runInputDiagnostics(instanceId: String): Boolean {
+        VmNativeBridge.setFramebufferRotation(instanceId, 0)
         VmNativeBridge.resetInputQueue(instanceId)
         val singleDown = VmNativeBridge.sendTouch(
             instanceId,
@@ -203,6 +211,7 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
     }
 
     private fun runLifecycleDiagnostics(instanceId: String): Boolean {
+        VmNativeBridge.setFramebufferRotation(instanceId, 0)
         val detach = VmNativeBridge.detachSurface(instanceId)
         val statsAfterDetach = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
         val inputAfterDetach = JSONObject(VmNativeBridge.getInputStats(instanceId))
@@ -219,13 +228,34 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
             statsAfterResize.optInt("surfaceWidth") == HOST_WIDTH &&
             statsAfterResize.optInt("surfaceHeight") == HOST_HEIGHT
 
+        val rotateSet = VmNativeBridge.setFramebufferRotation(instanceId, 90)
         val rotateResize = VmNativeBridge.resizeSurface(instanceId, HOST_HEIGHT, HOST_WIDTH, HOST_DENSITY_DPI)
+        VmNativeBridge.resetInputQueue(instanceId)
+        val rotateTouch = VmNativeBridge.sendTouch(
+            instanceId,
+            MotionEvent.ACTION_DOWN,
+            0,
+            HOST_HEIGHT / 2f,
+            HOST_WIDTH / 2f,
+        )
         val statsAfterRotate = JSONObject(VmNativeBridge.getGraphicsStats(instanceId))
+        val inputAfterRotate = JSONObject(VmNativeBridge.getInputStats(instanceId))
         val rotatePassed = rotateResize == 0 &&
+            rotateSet == 0 &&
+            rotateTouch == 0 &&
             statsAfterRotate.optInt("surfaceWidth") == HOST_HEIGHT &&
             statsAfterRotate.optInt("surfaceHeight") == HOST_WIDTH &&
             statsAfterRotate.optInt("framebufferWidth") == GUEST_WIDTH &&
-            statsAfterRotate.optInt("framebufferHeight") == GUEST_HEIGHT
+            statsAfterRotate.optInt("framebufferHeight") == GUEST_HEIGHT &&
+            statsAfterRotate.optInt("framebufferRotation") == 90 &&
+            statsAfterRotate.optInt("orientedWidth") == GUEST_HEIGHT &&
+            statsAfterRotate.optInt("orientedHeight") == GUEST_WIDTH &&
+            statsAfterRotate.optInt("mappingWidth") == HOST_HEIGHT &&
+            statsAfterRotate.optInt("mappingHeight") == HOST_WIDTH &&
+            abs(inputAfterRotate.optDouble("lastGuestX") - GUEST_WIDTH / 2.0) <= 1.0 &&
+            abs(inputAfterRotate.optDouble("lastGuestY") - GUEST_HEIGHT / 2.0) <= 1.0
+
+        VmNativeBridge.setFramebufferRotation(instanceId, 0)
 
         val passed = detachPassed && resizePassed && rotatePassed
 
@@ -234,7 +264,9 @@ class Stage5DiagnosticsReceiver : BroadcastReceiver() {
             "STAGE5_LIFECYCLE_RESULT passed=$passed detach=$detachPassed resize=$resizePassed rotate=$rotatePassed " +
                 "surfaceAfterDetach=${statsAfterDetach.optInt("surfaceWidth")}x${statsAfterDetach.optInt("surfaceHeight")} " +
                 "renderRunningAfterDetach=${statsAfterDetach.optBoolean("renderRunning")} " +
-                "surfaceAfterRotate=${statsAfterRotate.optInt("surfaceWidth")}x${statsAfterRotate.optInt("surfaceHeight")}",
+                "surfaceAfterRotate=${statsAfterRotate.optInt("surfaceWidth")}x${statsAfterRotate.optInt("surfaceHeight")} " +
+                "rotation=${statsAfterRotate.optInt("framebufferRotation")} " +
+                "rotatedGuest=${inputAfterRotate.optDouble("lastGuestX")},${inputAfterRotate.optDouble("lastGuestY")}",
         )
         return passed
     }

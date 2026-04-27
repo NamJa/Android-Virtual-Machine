@@ -532,6 +532,32 @@ struct SurfaceMapping {
     int height = 0;
 };
 
+struct DisplayDimensions {
+    int width = 0;
+    int height = 0;
+};
+
+int normalizeRotation(int rotation) {
+    int normalized = rotation % 360;
+    if (normalized < 0) {
+        normalized += 360;
+    }
+    return normalized;
+}
+
+bool isSupportedRotation(int rotation) {
+    const int normalized = normalizeRotation(rotation);
+    return normalized == 0 || normalized == 90 || normalized == 180 || normalized == 270;
+}
+
+DisplayDimensions orientedFramebufferDimensions(int framebufferWidth, int framebufferHeight, int rotation) {
+    const int normalized = normalizeRotation(rotation);
+    if (normalized == 90 || normalized == 270) {
+        return {framebufferHeight, framebufferWidth};
+    }
+    return {framebufferWidth, framebufferHeight};
+}
+
 SurfaceMapping computeSurfaceMapping(int surfaceWidth, int surfaceHeight, int guestWidth, int guestHeight) {
     if (surfaceWidth <= 0 || surfaceHeight <= 0 || guestWidth <= 0 || guestHeight <= 0) {
         return {};
@@ -548,6 +574,70 @@ SurfaceMapping computeSurfaceMapping(int surfaceWidth, int surfaceHeight, int gu
         mappedWidth,
         mappedHeight,
     };
+}
+
+void orientedToFramebufferPixel(
+    int orientedX,
+    int orientedY,
+    int framebufferWidth,
+    int framebufferHeight,
+    int rotation,
+    int& sourceX,
+    int& sourceY
+) {
+    const int normalized = normalizeRotation(rotation);
+    switch (normalized) {
+        case 90:
+            sourceX = orientedY;
+            sourceY = framebufferHeight - 1 - orientedX;
+            break;
+        case 180:
+            sourceX = framebufferWidth - 1 - orientedX;
+            sourceY = framebufferHeight - 1 - orientedY;
+            break;
+        case 270:
+            sourceX = framebufferWidth - 1 - orientedY;
+            sourceY = orientedX;
+            break;
+        default:
+            sourceX = orientedX;
+            sourceY = orientedY;
+            break;
+    }
+    sourceX = clampValue(sourceX, 0, framebufferWidth - 1);
+    sourceY = clampValue(sourceY, 0, framebufferHeight - 1);
+}
+
+void orientedToFramebufferPoint(
+    float orientedX,
+    float orientedY,
+    int framebufferWidth,
+    int framebufferHeight,
+    int rotation,
+    float& guestX,
+    float& guestY
+) {
+    const int normalized = normalizeRotation(rotation);
+    switch (normalized) {
+        case 90:
+            guestX = orientedY;
+            guestY = static_cast<float>(framebufferHeight) - orientedX;
+            break;
+        case 180:
+            guestX = static_cast<float>(framebufferWidth) - orientedX;
+            guestY = static_cast<float>(framebufferHeight) - orientedY;
+            break;
+        case 270:
+            guestX = static_cast<float>(framebufferWidth) - orientedY;
+            guestY = orientedX;
+            break;
+        default:
+            guestX = orientedX;
+            guestY = orientedY;
+            break;
+    }
+    guestX = clampValue(guestX, 0.0f, static_cast<float>(framebufferWidth));
+    guestY = clampValue(guestY, 0.0f, static_cast<float>(framebufferHeight));
 }
 
 void ensureFramebufferLocked(Instance& instance) {
@@ -593,11 +683,16 @@ GuestInputEvent mapTouchEventLocked(
     float hostY
 ) {
     ensureFramebufferLocked(instance);
+    const auto oriented = orientedFramebufferDimensions(
+        instance.framebufferWidth,
+        instance.framebufferHeight,
+        instance.framebufferRotation
+    );
     const auto mapping = computeSurfaceMapping(
         instance.width,
         instance.height,
-        instance.framebufferWidth,
-        instance.framebufferHeight
+        oriented.width,
+        oriented.height
     );
     const float normalizedX = mapping.width <= 0
         ? 0.0f
@@ -605,6 +700,17 @@ GuestInputEvent mapTouchEventLocked(
     const float normalizedY = mapping.height <= 0
         ? 0.0f
         : clampValue((hostY - static_cast<float>(mapping.top)) / static_cast<float>(mapping.height), 0.0f, 1.0f);
+    float guestX = 0.0f;
+    float guestY = 0.0f;
+    orientedToFramebufferPoint(
+        normalizedX * static_cast<float>(oriented.width),
+        normalizedY * static_cast<float>(oriented.height),
+        instance.framebufferWidth,
+        instance.framebufferHeight,
+        instance.framebufferRotation,
+        guestX,
+        guestY
+    );
     return {
         "touch",
         action,
@@ -613,8 +719,8 @@ GuestInputEvent mapTouchEventLocked(
         0,
         hostX,
         hostY,
-        normalizedX * static_cast<float>(instance.framebufferWidth),
-        normalizedY * static_cast<float>(instance.framebufferHeight),
+        guestX,
+        guestY,
     };
 }
 
@@ -811,6 +917,7 @@ void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
     std::vector<uint32_t> framebuffer;
     int framebufferWidth = 0;
     int framebufferHeight = 0;
+    int framebufferRotation = 0;
     int64_t nextCopies = 0;
     {
         std::lock_guard<std::mutex> guard(instance.lock);
@@ -818,11 +925,13 @@ void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
         framebuffer = instance.framebuffer;
         framebufferWidth = instance.framebufferWidth;
         framebufferHeight = instance.framebufferHeight;
+        framebufferRotation = instance.framebufferRotation;
         nextCopies = ++instance.surfaceCopies;
         instance.framebufferDirty = false;
     }
 
-    const auto mapping = computeSurfaceMapping(width, height, framebufferWidth, framebufferHeight);
+    const auto oriented = orientedFramebufferDimensions(framebufferWidth, framebufferHeight, framebufferRotation);
+    const auto mapping = computeSurfaceMapping(width, height, oriented.width, oriented.height);
     for (int y = 0; y < height; ++y) {
         uint32_t* row = pixels + (y * buffer.stride);
         for (int x = 0; x < width; ++x) {
@@ -833,25 +942,37 @@ void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
                 row[x] = 0xFF050505u;
                 continue;
             }
-            const int srcX = clampValue(
-                ((x - mapping.left) * framebufferWidth) / std::max(1, mapping.width),
+            const int orientedX = clampValue(
+                ((x - mapping.left) * oriented.width) / std::max(1, mapping.width),
                 0,
-                framebufferWidth - 1
+                oriented.width - 1
             );
-            const int srcY = clampValue(
-                ((y - mapping.top) * framebufferHeight) / std::max(1, mapping.height),
+            const int orientedY = clampValue(
+                ((y - mapping.top) * oriented.height) / std::max(1, mapping.height),
                 0,
-                framebufferHeight - 1
+                oriented.height - 1
+            );
+            int srcX = 0;
+            int srcY = 0;
+            orientedToFramebufferPixel(
+                orientedX,
+                orientedY,
+                framebufferWidth,
+                framebufferHeight,
+                framebufferRotation,
+                srcX,
+                srcY
             );
             row[x] = framebuffer[static_cast<std::size_t>(srcY * framebufferWidth + srcX)];
         }
     }
     if (nextCopies % 120 == 0) {
         AVM_LOGI(
-            "software framebuffer copied frame=%lld size=%dx%d surface=%dx%d",
+            "software framebuffer copied frame=%lld size=%dx%d rotation=%d surface=%dx%d",
             static_cast<long long>(nextCopies),
             framebufferWidth,
             framebufferHeight,
+            framebufferRotation,
             width,
             height
         );
@@ -973,6 +1094,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->properties = loadGuestProperties(rootfsPath);
         instance->framebufferWidth = displayWidth > 0 ? displayWidth : 720;
         instance->framebufferHeight = displayHeight > 0 ? displayHeight : 1280;
+        instance->framebufferRotation = 0;
         instance->framebuffer.clear();
         instance->framebufferFrames = 0;
         instance->surfaceCopies = 0;
@@ -1230,15 +1352,23 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
     const bool renderRunning = instance->renderRunning.load();
     {
         std::lock_guard<std::mutex> guard(instance->lock);
+        const auto oriented = orientedFramebufferDimensions(
+            instance->framebufferWidth,
+            instance->framebufferHeight,
+            instance->framebufferRotation
+        );
         const auto mapping = computeSurfaceMapping(
             instance->width,
             instance->height,
-            instance->framebufferWidth,
-            instance->framebufferHeight
+            oriented.width,
+            oriented.height
         );
         json << "{"
              << "\"framebufferWidth\":" << instance->framebufferWidth << ","
              << "\"framebufferHeight\":" << instance->framebufferHeight << ","
+             << "\"framebufferRotation\":" << instance->framebufferRotation << ","
+             << "\"orientedWidth\":" << oriented.width << ","
+             << "\"orientedHeight\":" << oriented.height << ","
              << "\"surfaceWidth\":" << instance->width << ","
              << "\"surfaceHeight\":" << instance->height << ","
              << "\"mappingLeft\":" << mapping.left << ","
@@ -1255,6 +1385,27 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
     }
     const auto result = json.str();
     return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_setFramebufferRotation(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jint rotationDegrees
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance || !isSupportedRotation(rotationDegrees)) {
+        return kInvalidInstance;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->framebufferRotation = normalizeRotation(rotationDegrees);
+        instance->framebufferDirty = true;
+    }
+    appendInstanceLog(instance, "framebuffer rotation=" + std::to_string(normalizeRotation(rotationDegrees)));
+    return kOk;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

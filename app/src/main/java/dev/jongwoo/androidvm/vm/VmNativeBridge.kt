@@ -50,6 +50,9 @@ object VmNativeBridge {
     external fun getGraphicsStats(instanceId: String): String
 
     @JvmStatic
+    external fun setFramebufferRotation(instanceId: String, rotationDegrees: Int): Int
+
+    @JvmStatic
     external fun getInputStats(instanceId: String): String
 
     @JvmStatic
