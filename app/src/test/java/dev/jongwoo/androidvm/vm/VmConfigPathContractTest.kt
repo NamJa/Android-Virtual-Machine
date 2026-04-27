@@ -35,6 +35,17 @@ class VmConfigPathContractTest {
         assertEquals(paths.imageManifestFile.absolutePath, exportedPaths.getString("imageManifestFile"))
     }
 
+    @Test
+    fun defaultConfigDisplayMatchesStage5MvpPortraitTarget() {
+        val paths = instancePaths()
+
+        val display = JSONObject(VmConfig.default(paths).toJson()).getJSONObject("display")
+
+        assertEquals(720, display.getInt("width"))
+        assertEquals(1280, display.getInt("height"))
+        assertEquals(320, display.getInt("densityDpi"))
+    }
+
     private fun instancePaths(): InstancePaths {
         val root = Files.createTempDirectory("vm-config-paths").toFile().also { tempDirs += it }
         val configDir = File(root, "config")

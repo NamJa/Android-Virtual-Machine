@@ -44,6 +44,29 @@ object VmNativeBridge {
     external fun getBootstrapStatus(instanceId: String): String
 
     @JvmStatic
+    external fun writeFramebufferTestPattern(instanceId: String, frameIndex: Int): Int
+
+    @JvmStatic
+    external fun getGraphicsStats(instanceId: String): String
+
+    @JvmStatic
+    external fun getInputStats(instanceId: String): String
+
+    @JvmStatic
+    external fun resetInputQueue(instanceId: String): Int
+
+    @JvmStatic
+    external fun generateAudioTestTone(
+        instanceId: String,
+        sampleRate: Int,
+        frames: Int,
+        muted: Boolean,
+    ): Int
+
+    @JvmStatic
+    external fun getAudioStats(instanceId: String): String
+
+    @JvmStatic
     external fun resolveGuestPath(instanceId: String, guestPath: String, writeAccess: Boolean): String
 
     fun resolveGuestPathResult(

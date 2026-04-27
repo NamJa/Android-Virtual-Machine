@@ -60,6 +60,11 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    override fun onPause() {
+        VmNativeBridge.resetInputQueue(instanceId)
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (attached) {
             VmNativeBridge.detachSurface(instanceId)

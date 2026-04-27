@@ -7,9 +7,10 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
-#include <cstdint>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -61,6 +62,18 @@ struct OpenFile {
     std::size_t cursor = 0;
 };
 
+struct GuestInputEvent {
+    std::string type;
+    int action = 0;
+    int pointerId = 0;
+    int keyCode = 0;
+    int metaState = 0;
+    float hostX = 0.0f;
+    float hostY = 0.0f;
+    float guestX = 0.0f;
+    float guestY = 0.0f;
+};
+
 struct Instance {
     std::mutex lock;
     std::string configJson;
@@ -74,8 +87,21 @@ struct Instance {
     std::map<std::string, std::string> properties;
     std::map<std::string, int> binderServices;
     std::string bootstrapStatus;
+    std::vector<uint32_t> framebuffer;
+    std::vector<GuestInputEvent> inputQueue;
     int nextFd = 1000;
     int nextBinderHandle = 1;
+    int framebufferWidth = 720;
+    int framebufferHeight = 1280;
+    int framebufferRotation = 0;
+    int64_t framebufferFrames = 0;
+    int64_t surfaceCopies = 0;
+    int64_t inputQueueResets = 0;
+    int audioSampleRate = 48000;
+    int audioFramesGenerated = 0;
+    int audioChannels = 2;
+    bool framebufferDirty = false;
+    bool audioMuted = false;
     ANativeWindow* window = nullptr;
     std::thread renderThread;
     std::thread guestThread;
@@ -192,6 +218,30 @@ std::string extractJsonString(const std::string& json, const std::string& key) {
         value << ch;
     }
     return {};
+}
+
+int extractJsonInt(const std::string& json, const std::string& key, int fallback) {
+    const auto keyPattern = "\"" + key + "\"";
+    const auto keyPosition = json.find(keyPattern);
+    if (keyPosition == std::string::npos) {
+        return fallback;
+    }
+    const auto colonPosition = json.find(':', keyPosition + keyPattern.size());
+    if (colonPosition == std::string::npos) {
+        return fallback;
+    }
+    auto cursor = colonPosition + 1;
+    while (cursor < json.size() && std::isspace(static_cast<unsigned char>(json[cursor]))) {
+        ++cursor;
+    }
+    std::size_t end = cursor;
+    while (end < json.size() && (std::isdigit(static_cast<unsigned char>(json[end])) || json[end] == '-')) {
+        ++end;
+    }
+    if (end == cursor) {
+        return fallback;
+    }
+    return std::stoi(json.substr(cursor, end - cursor));
 }
 
 std::string escapeJson(const std::string& value) {
@@ -397,7 +447,10 @@ bool isVirtualDevicePath(const std::string& path) {
         path == "/dev/hwbinder" ||
         path == "/dev/vndbinder" ||
         path == "/dev/ashmem" ||
-        path == "/dev/input/event0";
+        path == "/dev/input/event0" ||
+        path == "/dev/graphics/fb0" ||
+        path == "/dev/fb0" ||
+        path == "/dev/snd/pcmC0D0p";
 }
 
 PathResolution resolveGuestPathForInstance(
@@ -466,6 +519,142 @@ std::string jsonPathResolution(const PathResolution& resolution) {
     );
 }
 
+template <typename T>
+T clampValue(T value, T minValue, T maxValue) {
+    return std::min(maxValue, std::max(minValue, value));
+}
+
+struct SurfaceMapping {
+    int left = 0;
+    int top = 0;
+    int width = 0;
+    int height = 0;
+};
+
+SurfaceMapping computeSurfaceMapping(int surfaceWidth, int surfaceHeight, int guestWidth, int guestHeight) {
+    if (surfaceWidth <= 0 || surfaceHeight <= 0 || guestWidth <= 0 || guestHeight <= 0) {
+        return {};
+    }
+    const double scale = std::min(
+        static_cast<double>(surfaceWidth) / static_cast<double>(guestWidth),
+        static_cast<double>(surfaceHeight) / static_cast<double>(guestHeight)
+    );
+    const int mappedWidth = std::max(1, static_cast<int>(std::round(guestWidth * scale)));
+    const int mappedHeight = std::max(1, static_cast<int>(std::round(guestHeight * scale)));
+    return {
+        (surfaceWidth - mappedWidth) / 2,
+        (surfaceHeight - mappedHeight) / 2,
+        mappedWidth,
+        mappedHeight,
+    };
+}
+
+void ensureFramebufferLocked(Instance& instance) {
+    if (instance.framebufferWidth <= 0) {
+        instance.framebufferWidth = 720;
+    }
+    if (instance.framebufferHeight <= 0) {
+        instance.framebufferHeight = 1280;
+    }
+    const auto requiredSize = static_cast<std::size_t>(instance.framebufferWidth * instance.framebufferHeight);
+    if (instance.framebuffer.size() != requiredSize) {
+        instance.framebuffer.assign(requiredSize, 0xFF101010u);
+        instance.framebufferDirty = true;
+    }
+}
+
+uint32_t framebufferColorFor(int x, int y, int width, int height, uint32_t frame) {
+    const uint8_t r = static_cast<uint8_t>((x * 255) / (width <= 0 ? 1 : width));
+    const uint8_t g = static_cast<uint8_t>((y * 255) / (height <= 0 ? 1 : height));
+    const uint8_t b = static_cast<uint8_t>((frame * 5 + x + y) & 0xFF);
+    return (0xFFu << 24u) | (static_cast<uint32_t>(b) << 16u) |
+           (static_cast<uint32_t>(g) << 8u) | static_cast<uint32_t>(r);
+}
+
+void writeFramebufferPatternLocked(Instance& instance, uint32_t frame) {
+    ensureFramebufferLocked(instance);
+    for (int y = 0; y < instance.framebufferHeight; ++y) {
+        for (int x = 0; x < instance.framebufferWidth; ++x) {
+            instance.framebuffer[static_cast<std::size_t>(y * instance.framebufferWidth + x)] =
+                framebufferColorFor(x, y, instance.framebufferWidth, instance.framebufferHeight, frame);
+        }
+    }
+    instance.framebufferFrames++;
+    instance.framebufferDirty = true;
+}
+
+GuestInputEvent mapTouchEventLocked(
+    Instance& instance,
+    int action,
+    int pointerId,
+    float hostX,
+    float hostY
+) {
+    ensureFramebufferLocked(instance);
+    const auto mapping = computeSurfaceMapping(
+        instance.width,
+        instance.height,
+        instance.framebufferWidth,
+        instance.framebufferHeight
+    );
+    const float normalizedX = mapping.width <= 0
+        ? 0.0f
+        : clampValue((hostX - static_cast<float>(mapping.left)) / static_cast<float>(mapping.width), 0.0f, 1.0f);
+    const float normalizedY = mapping.height <= 0
+        ? 0.0f
+        : clampValue((hostY - static_cast<float>(mapping.top)) / static_cast<float>(mapping.height), 0.0f, 1.0f);
+    return {
+        "touch",
+        action,
+        pointerId,
+        0,
+        0,
+        hostX,
+        hostY,
+        normalizedX * static_cast<float>(instance.framebufferWidth),
+        normalizedY * static_cast<float>(instance.framebufferHeight),
+    };
+}
+
+int parseFirstPositiveInt(const std::string& payload, int fallback) {
+    std::size_t cursor = 0;
+    while (cursor < payload.size() && !std::isdigit(static_cast<unsigned char>(payload[cursor]))) {
+        ++cursor;
+    }
+    if (cursor == payload.size()) {
+        return fallback;
+    }
+    std::size_t end = cursor;
+    while (end < payload.size() && std::isdigit(static_cast<unsigned char>(payload[end]))) {
+        ++end;
+    }
+    const int parsed = std::stoi(payload.substr(cursor, end - cursor));
+    return parsed > 0 ? parsed : fallback;
+}
+
+int parseNamedPositiveInt(const std::string& payload, const std::string& name, int fallback) {
+    const auto keyPosition = payload.find(name);
+    if (keyPosition == std::string::npos) {
+        return fallback;
+    }
+    return parseFirstPositiveInt(payload.substr(keyPosition + name.size()), fallback);
+}
+
+void handleVirtualDeviceWriteLocked(Instance& instance, const OpenFile& openFile, const std::string& payload) {
+    if (openFile.guestPath == "/dev/graphics/fb0" || openFile.guestPath == "/dev/fb0") {
+        const int frame = parseNamedPositiveInt(payload, "frame", static_cast<int>(instance.frame));
+        writeFramebufferPatternLocked(instance, static_cast<uint32_t>(frame));
+        return;
+    }
+    if (openFile.guestPath == "/dev/snd/pcmC0D0p") {
+        const int sampleRate = parseNamedPositiveInt(payload, "rate", instance.audioSampleRate);
+        const int frames = parseNamedPositiveInt(payload, "frames", std::max(1, static_cast<int>(payload.size() / 4)));
+        instance.audioSampleRate = sampleRate;
+        instance.audioFramesGenerated += frames;
+        instance.audioMuted = payload.find("muted=true") != std::string::npos;
+    }
+}
+
 std::string virtualNodeContent(const std::string& guestPath) {
     if (guestPath == "/proc/cpuinfo") {
         return "Processor\t: AArch64 Processor rev 0 (aarch64)\nHardware\t: AndroidVirtualMachine\n";
@@ -481,6 +670,12 @@ std::string virtualNodeContent(const std::string& guestPath) {
     }
     if (guestPath == "/property/context") {
         return "virtual property namespace\n";
+    }
+    if (guestPath == "/dev/graphics/fb0" || guestPath == "/dev/fb0") {
+        return "android-vm-framebuffer format=RGBA_8888 protocol=pattern-command\n";
+    }
+    if (guestPath == "/dev/snd/pcmC0D0p") {
+        return "android-vm-audio-output format=PCM16 channels=2 protocol=tone-command\n";
     }
     return {};
 }
@@ -607,24 +802,57 @@ void stopGuestProcessThread(const std::shared_ptr<Instance>& instance) {
     }
 }
 
-uint32_t colorFor(uint32_t frame, int x, int y, int width, int height) {
-    const uint8_t r = static_cast<uint8_t>((x * 255) / (width <= 0 ? 1 : width));
-    const uint8_t g = static_cast<uint8_t>((y * 255) / (height <= 0 ? 1 : height));
-    const uint8_t b = static_cast<uint8_t>((frame * 3) & 0xFF);
-    return (0xFFu << 24u) | (static_cast<uint32_t>(b) << 16u) |
-           (static_cast<uint32_t>(g) << 8u) | static_cast<uint32_t>(r);
-}
-
 void drawFrame(Instance& instance, ANativeWindow_Buffer& buffer) {
     const auto width = buffer.width;
     const auto height = buffer.height;
     auto* pixels = static_cast<uint32_t*>(buffer.bits);
-    const uint32_t frame = instance.frame++;
+    std::vector<uint32_t> framebuffer;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    int64_t nextCopies = 0;
+    {
+        std::lock_guard<std::mutex> guard(instance.lock);
+        writeFramebufferPatternLocked(instance, instance.frame++);
+        framebuffer = instance.framebuffer;
+        framebufferWidth = instance.framebufferWidth;
+        framebufferHeight = instance.framebufferHeight;
+        nextCopies = ++instance.surfaceCopies;
+        instance.framebufferDirty = false;
+    }
+
+    const auto mapping = computeSurfaceMapping(width, height, framebufferWidth, framebufferHeight);
     for (int y = 0; y < height; ++y) {
         uint32_t* row = pixels + (y * buffer.stride);
         for (int x = 0; x < width; ++x) {
-            row[x] = colorFor(frame, x, y, width, height);
+            if (x < mapping.left ||
+                x >= mapping.left + mapping.width ||
+                y < mapping.top ||
+                y >= mapping.top + mapping.height) {
+                row[x] = 0xFF050505u;
+                continue;
+            }
+            const int srcX = clampValue(
+                ((x - mapping.left) * framebufferWidth) / std::max(1, mapping.width),
+                0,
+                framebufferWidth - 1
+            );
+            const int srcY = clampValue(
+                ((y - mapping.top) * framebufferHeight) / std::max(1, mapping.height),
+                0,
+                framebufferHeight - 1
+            );
+            row[x] = framebuffer[static_cast<std::size_t>(srcY * framebufferWidth + srcX)];
         }
+    }
+    if (nextCopies % 120 == 0) {
+        AVM_LOGI(
+            "software framebuffer copied frame=%lld size=%dx%d surface=%dx%d",
+            static_cast<long long>(nextCopies),
+            framebufferWidth,
+            framebufferHeight,
+            width,
+            height
+        );
     }
 }
 
@@ -723,6 +951,8 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
     const auto dataDir = extractJsonString(config, "dataDir");
     const auto cacheDir = extractJsonString(config, "cacheDir");
     const auto logsDir = extractJsonString(config, "logsDir");
+    const auto displayWidth = extractJsonInt(config, "width", 720);
+    const auto displayHeight = extractJsonInt(config, "height", 1280);
     if (config.empty() || rootfsPath.empty() || dataDir.empty() || cacheDir.empty() || logsDir.empty()) {
         AVM_LOGW("invalid config for %s", id.c_str());
         auto instance = instanceFor(id);
@@ -739,6 +969,10 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->logsDir = logsDir;
         instance->logPath = logsDir + "/native_runtime.log";
         instance->properties = loadGuestProperties(rootfsPath);
+        instance->framebufferWidth = displayWidth > 0 ? displayWidth : 720;
+        instance->framebufferHeight = displayHeight > 0 ? displayHeight : 1280;
+        instance->framebuffer.clear();
+        ensureFramebufferLocked(*instance);
         instance->binderServices.clear();
         instance->bootstrapStatus.clear();
         instance->nextBinderHandle = 1;
@@ -956,6 +1190,170 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getBootstrapStatus(
     return env->NewStringUTF(instance->bootstrapStatus.c_str());
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_writeFramebufferTestPattern(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jint frameIndex
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        return kInvalidInstance;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        writeFramebufferPatternLocked(*instance, static_cast<uint32_t>(frameIndex));
+    }
+    appendInstanceLog(instance, "framebuffer test pattern frame=" + std::to_string(frameIndex));
+    return kOk;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        return env->NewStringUTF("{}");
+    }
+    std::ostringstream json;
+    const bool renderRunning = instance->renderRunning.load();
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        const auto mapping = computeSurfaceMapping(
+            instance->width,
+            instance->height,
+            instance->framebufferWidth,
+            instance->framebufferHeight
+        );
+        json << "{"
+             << "\"framebufferWidth\":" << instance->framebufferWidth << ","
+             << "\"framebufferHeight\":" << instance->framebufferHeight << ","
+             << "\"surfaceWidth\":" << instance->width << ","
+             << "\"surfaceHeight\":" << instance->height << ","
+             << "\"mappingLeft\":" << mapping.left << ","
+             << "\"mappingTop\":" << mapping.top << ","
+             << "\"mappingWidth\":" << mapping.width << ","
+             << "\"mappingHeight\":" << mapping.height << ","
+             << "\"framebufferFrames\":" << instance->framebufferFrames << ","
+             << "\"surfaceCopies\":" << instance->surfaceCopies << ","
+             << "\"dirty\":" << (instance->framebufferDirty ? "true" : "false") << ","
+             << "\"surfaceAttached\":" << (instance->window != nullptr ? "true" : "false") << ","
+             << "\"renderRunning\":" << (renderRunning ? "true" : "false")
+             << "}";
+    }
+    const auto result = json.str();
+    return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getInputStats(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        return env->NewStringUTF("{}");
+    }
+    std::ostringstream json;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        GuestInputEvent lastEvent;
+        if (!instance->inputQueue.empty()) {
+            lastEvent = instance->inputQueue.back();
+        }
+        json << "{"
+             << "\"queueSize\":" << instance->inputQueue.size() << ","
+             << "\"resets\":" << instance->inputQueueResets << ","
+             << "\"lastType\":\"" << escapeJson(lastEvent.type) << "\","
+             << "\"lastAction\":" << lastEvent.action << ","
+             << "\"lastPointerId\":" << lastEvent.pointerId << ","
+             << "\"lastKeyCode\":" << lastEvent.keyCode << ","
+             << "\"lastMetaState\":" << lastEvent.metaState << ","
+             << "\"lastGuestX\":" << lastEvent.guestX << ","
+             << "\"lastGuestY\":" << lastEvent.guestY
+             << "}";
+    }
+    const auto result = json.str();
+    return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_resetInputQueue(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        return kInvalidInstance;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->inputQueue.clear();
+        instance->inputQueueResets++;
+    }
+    appendInstanceLog(instance, "input queue reset");
+    return kOk;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_generateAudioTestTone(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jint sampleRate,
+    jint frames,
+    jboolean muted
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance || sampleRate <= 0 || frames <= 0) {
+        return kInvalidInstance;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->audioSampleRate = sampleRate;
+        instance->audioFramesGenerated += frames;
+        instance->audioMuted = muted == JNI_TRUE;
+    }
+    appendInstanceLog(instance, "audio test tone frames=" + std::to_string(frames));
+    return frames;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getAudioStats(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        return env->NewStringUTF("{}");
+    }
+    std::ostringstream json;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        json << "{"
+             << "\"sampleRate\":" << instance->audioSampleRate << ","
+             << "\"framesGenerated\":" << instance->audioFramesGenerated << ","
+             << "\"channels\":" << instance->audioChannels << ","
+             << "\"muted\":" << (instance->audioMuted ? "true" : "false")
+             << "}";
+    }
+    const auto result = json.str();
+    return env->NewStringUTF(result.c_str());
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_jongwoo_androidvm_vm_VmNativeBridge_resolveGuestPath(
     JNIEnv* env,
@@ -1088,6 +1486,9 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_writeGuestFile(
         auto& openFile = found->second;
         openFile.content += payload;
         openFile.cursor = openFile.content.size();
+        if (openFile.virtualNode && openFile.deviceNode) {
+            handleVirtualDeviceWriteLocked(*instance, openFile, payload);
+        }
         if (!openFile.virtualNode) {
             hostPath = openFile.hostPath;
             nextContent = openFile.content;
@@ -1169,6 +1570,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_attachSurface(
         instance->width = width;
         instance->height = height;
         instance->densityDpi = densityDpi;
+        ensureFramebufferLocked(*instance);
     }
     if (oldWindow != nullptr) {
         ANativeWindow_release(oldWindow);
@@ -1198,6 +1600,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_resizeSurface(
     instance->width = width;
     instance->height = height;
     instance->densityDpi = densityDpi;
+    ensureFramebufferLocked(*instance);
     if (instance->window != nullptr) {
         ANativeWindow_setBuffersGeometry(instance->window, width, height, WINDOW_FORMAT_RGBA_8888);
     }
@@ -1217,6 +1620,11 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_detachSurface(
     }
     stopRenderer(instance);
     clearWindow(instance);
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->inputQueue.clear();
+        instance->inputQueueResets++;
+    }
     AVM_LOGI("surface detached id=%s", id.c_str());
     return kOk;
 }
@@ -1236,9 +1644,27 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_sendTouch(
     if (!instance) {
         return kInvalidInstance;
     }
+    GuestInputEvent mapped;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        mapped = mapTouchEventLocked(*instance, action, pointerId, x, y);
+        instance->inputQueue.push_back(mapped);
+        if (instance->inputQueue.size() > 256) {
+            instance->inputQueue.erase(instance->inputQueue.begin());
+        }
+    }
     const auto count = ++instance->inputEvents;
     if (count % 120 == 0) {
-        AVM_LOGI("touch id=%s action=%d pointer=%d x=%.1f y=%.1f", id.c_str(), action, pointerId, x, y);
+        AVM_LOGI(
+            "touch id=%s action=%d pointer=%d host=%.1f,%.1f guest=%.1f,%.1f",
+            id.c_str(),
+            action,
+            pointerId,
+            x,
+            y,
+            mapped.guestX,
+            mapped.guestY
+        );
     }
     return kOk;
 }
@@ -1256,6 +1682,23 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_sendKey(
     auto instance = findInstance(id);
     if (!instance) {
         return kInvalidInstance;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->inputQueue.push_back({
+            "key",
+            action,
+            0,
+            keyCode,
+            metaState,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+        });
+        if (instance->inputQueue.size() > 256) {
+            instance->inputQueue.erase(instance->inputQueue.begin());
+        }
     }
     const auto count = ++instance->inputEvents;
     if (count % 40 == 0) {
