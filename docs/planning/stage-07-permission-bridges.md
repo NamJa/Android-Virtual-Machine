@@ -180,15 +180,15 @@ enum class BridgeType {
 ### BridgeMode
 
 ```kotlin
-sealed interface BridgeMode {
-    data object Off : BridgeMode
-    data object Enabled : BridgeMode
-    data object Unsupported : BridgeMode
-    data object ClipboardHostToGuest : BridgeMode
-    data object ClipboardGuestToHost : BridgeMode
-    data object ClipboardBidirectional : BridgeMode
-    data class FixedLocation(val latitude: Double, val longitude: Double) : BridgeMode
-    data object HostLocation : BridgeMode
+enum class BridgeMode {
+    OFF,
+    ENABLED,
+    UNSUPPORTED,
+    CLIPBOARD_HOST_TO_GUEST,
+    CLIPBOARD_GUEST_TO_HOST,
+    CLIPBOARD_BIDIRECTIONAL,
+    LOCATION_FIXED,
+    LOCATION_HOST_REAL,
 }
 ```
 
@@ -206,7 +206,6 @@ enum class BridgeResult {
     DENIED,
     UNAVAILABLE,
     UNSUPPORTED,
-    PERMISSION_REQUIRED,
 }
 ```
 
@@ -241,6 +240,89 @@ Stage 07 착수 전에 Stage 06 runtime-compatible 완료 상태와 permission b
 - Stage 07 MVP에서 지원할 bridge와 unsupported로 남길 bridge를 코드 상수로 고정한다.
 - Stage 07에서 실제 host 개인정보를 반환하면 안 되는 항목을 denylist로 정의한다.
 
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeType.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/Stage7BridgeScope.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/ManifestPermissionGuardTest.kt
+```
+
+`Stage7BridgeScope`는 Stage 07 MVP에서 구현/미구현 경계를 테스트 가능한 형태로 고정한다.
+
+```kotlin
+package dev.jongwoo.androidvm.bridge
+
+enum class BridgeType {
+    CLIPBOARD,
+    LOCATION,
+    CAMERA,
+    MICROPHONE,
+    AUDIO_OUTPUT,
+    NETWORK,
+    DEVICE_PROFILE,
+    VIBRATION,
+}
+
+enum class BridgeSupport {
+    SUPPORTED,
+    UNSUPPORTED_MVP,
+}
+
+object Stage7BridgeScope {
+    val support = mapOf(
+        BridgeType.CLIPBOARD to BridgeSupport.SUPPORTED,
+        BridgeType.LOCATION to BridgeSupport.SUPPORTED,
+        BridgeType.CAMERA to BridgeSupport.UNSUPPORTED_MVP,
+        BridgeType.MICROPHONE to BridgeSupport.UNSUPPORTED_MVP,
+        BridgeType.AUDIO_OUTPUT to BridgeSupport.SUPPORTED,
+        BridgeType.NETWORK to BridgeSupport.SUPPORTED,
+        BridgeType.DEVICE_PROFILE to BridgeSupport.SUPPORTED,
+        BridgeType.VIBRATION to BridgeSupport.SUPPORTED,
+    )
+
+    val forbiddenHostIdentityFields = setOf(
+        "imei",
+        "meid",
+        "phoneNumber",
+        "simSerialNumber",
+        "advertisingId",
+        "hostInstalledPackages",
+    )
+}
+```
+
+Manifest guard test는 문서 정책이 코드에서 깨지는 즉시 실패해야 한다.
+
+```kotlin
+class ManifestPermissionGuardTest {
+    @Test
+    fun manifestDoesNotDeclareForbiddenPermissions() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val forbidden = listOf(
+            "android.permission.QUERY_ALL_PACKAGES",
+            "android.permission.READ_PHONE_STATE",
+            "android.permission.READ_PRIVILEGED_PHONE_STATE",
+            "android.permission.WRITE_SETTINGS",
+            "android.permission.CHANGE_WIFI_STATE",
+            "android.permission.SYSTEM_ALERT_WINDOW",
+            "android.permission.SYSTEM_OVERLAY_WINDOW",
+            "android.permission.AD_ID",
+            "com.google.android.gms.permission.AD_ID",
+        )
+
+        forbidden.forEach { permission ->
+            assertFalse(
+                "Forbidden permission must not be declared: $permission",
+                manifest.contains(permission),
+            )
+        }
+    }
+}
+```
+
 ### 완료 기준
 
 - Stage 06 diagnostics가 통과한다.
@@ -265,6 +347,63 @@ Stage 07 착수 전에 Stage 06 runtime-compatible 완료 상태와 permission b
 - `ACCESS_FINE_LOCATION`, `CAMERA`, `RECORD_AUDIO`가 기본 user flow에서 요청되지 않는지 추적할 수 있게 permission request recorder를 추가한다.
 - Host dangerous permission request는 `PermissionBroker`를 통해서만 호출되도록 entry point를 하나로 모은다.
 - Permission request reason message model을 정의한다.
+
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/PermissionReason.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/PermissionRequestGateway.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/RecordingPermissionGateway.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/PermissionRequestGatewayTest.kt
+```
+
+Dangerous permission 요청은 직접 Activity API를 호출하지 않고 gateway를 통해서만 수행한다.
+
+```kotlin
+data class PermissionReason(
+    val bridge: BridgeType,
+    val operation: String,
+    val permission: String,
+    val userMessage: String,
+)
+
+interface PermissionRequestGateway {
+    suspend fun request(permission: String, reason: PermissionReason): Boolean
+}
+
+class RecordingPermissionGateway : PermissionRequestGateway {
+    private val _requests = mutableListOf<PermissionReason>()
+    val requests: List<PermissionReason> get() = _requests.toList()
+
+    var nextResult: Boolean = false
+
+    override suspend fun request(permission: String, reason: PermissionReason): Boolean {
+        check(permission == reason.permission) {
+            "Permission and reason.permission must match"
+        }
+        _requests += reason
+        return nextResult
+    }
+}
+```
+
+기본 APK install/launch flow test에서는 request recorder가 비어 있어야 한다.
+
+```kotlin
+@Test
+fun apkInstallLaunchFlowDoesNotRequestDangerousPermission() = runTest {
+    val gateway = RecordingPermissionGateway()
+
+    runStage6InstallLaunchSmokeFlow(permissionGateway = gateway)
+
+    assertTrue(
+        "Stage 06 basic flow must not request dangerous permissions",
+        gateway.requests.isEmpty(),
+    )
+}
+```
 
 ### 완료 기준
 
@@ -292,6 +431,84 @@ Instance별 bridge enable/mode 상태를 저장하고 VM restart 후에도 유�
 - Policy load/save failure를 명확한 error로 반환한다.
 - Instance boundary 밖 path escape를 막는다.
 
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeMode.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgePolicy.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgePolicyStore.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/BridgePolicyStoreTest.kt
+```
+
+Policy는 instance별 JSON으로 저장한다.
+
+```kotlin
+enum class BridgeMode {
+    OFF,
+    ENABLED,
+    UNSUPPORTED,
+    CLIPBOARD_HOST_TO_GUEST,
+    CLIPBOARD_GUEST_TO_HOST,
+    CLIPBOARD_BIDIRECTIONAL,
+    LOCATION_FIXED,
+    LOCATION_HOST_REAL,
+}
+
+data class BridgePolicy(
+    val bridge: BridgeType,
+    val mode: BridgeMode,
+    val enabled: Boolean,
+    val options: Map<String, String> = emptyMap(),
+)
+
+object DefaultBridgePolicies {
+    val all = mapOf(
+        BridgeType.CLIPBOARD to BridgePolicy(BridgeType.CLIPBOARD, BridgeMode.OFF, enabled = false),
+        BridgeType.LOCATION to BridgePolicy(BridgeType.LOCATION, BridgeMode.OFF, enabled = false),
+        BridgeType.CAMERA to BridgePolicy(BridgeType.CAMERA, BridgeMode.UNSUPPORTED, enabled = false),
+        BridgeType.MICROPHONE to BridgePolicy(BridgeType.MICROPHONE, BridgeMode.UNSUPPORTED, enabled = false),
+        BridgeType.AUDIO_OUTPUT to BridgePolicy(BridgeType.AUDIO_OUTPUT, BridgeMode.ENABLED, enabled = true),
+        BridgeType.NETWORK to BridgePolicy(BridgeType.NETWORK, BridgeMode.ENABLED, enabled = true),
+        BridgeType.DEVICE_PROFILE to BridgePolicy(BridgeType.DEVICE_PROFILE, BridgeMode.ENABLED, enabled = true),
+        BridgeType.VIBRATION to BridgePolicy(BridgeType.VIBRATION, BridgeMode.ENABLED, enabled = true),
+    )
+}
+```
+
+Store는 instance root 밖으로 나가지 않는 path resolver를 사용한다.
+
+```kotlin
+class BridgePolicyStore(
+    private val instanceRoot: File,
+) {
+    private val policyFile: File
+        get() = File(instanceRoot, "bridge-policy.json")
+            .canonicalFile
+            .also { file ->
+                require(file.path.startsWith(instanceRoot.canonicalPath)) {
+                    "Bridge policy path escaped instance root"
+                }
+            }
+
+    fun load(): Map<BridgeType, BridgePolicy> {
+        val file = policyFile
+        if (!file.exists()) return DefaultBridgePolicies.all
+        return runCatching { decodePolicies(file.readText()) }
+            .getOrElse { DefaultBridgePolicies.all }
+    }
+
+    fun save(policies: Map<BridgeType, BridgePolicy>) {
+        val file = policyFile
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, "${file.name}.tmp")
+        tmp.writeText(encodePolicies(policies))
+        check(tmp.renameTo(file)) { "Failed to commit bridge policy" }
+    }
+}
+```
+
 ### 기본 policy
 
 ```text
@@ -301,7 +518,7 @@ camera = unsupported
 microphone = unsupported
 audio_output = enabled
 network = enabled
-device_profile = enabled_synthetic
+device_profile = enabled (synthetic only)
 vibration = enabled
 ```
 
@@ -354,6 +571,80 @@ interface PermissionBroker {
 - Permission denied 결과를 guest에 안정적으로 전달한다.
 - Permission reason은 bridge, operation, requested permission을 포함한다.
 
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeDecision.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/PermissionBroker.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/DefaultPermissionBroker.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/PermissionBrokerTest.kt
+```
+
+Broker는 policy 판정, dangerous permission 요청, result 생성을 한 곳에 모은다.
+
+```kotlin
+data class BridgeDecision(
+    val allowed: Boolean,
+    val result: BridgeResult,
+    val reason: String,
+)
+
+enum class BridgeResult {
+    ALLOWED,
+    DENIED,
+    UNAVAILABLE,
+    UNSUPPORTED,
+}
+
+class DefaultPermissionBroker(
+    private val policyStore: BridgePolicyStore,
+    private val permissionGateway: PermissionRequestGateway,
+) : PermissionBroker {
+    override suspend fun decide(
+        instanceId: String,
+        bridge: BridgeType,
+        operation: String,
+        reason: PermissionReason,
+    ): BridgeDecision {
+        val policy = policyStore.load().getValue(bridge)
+        if (policy.mode == BridgeMode.UNSUPPORTED) {
+            return BridgeDecision(false, BridgeResult.UNSUPPORTED, "bridge_unsupported")
+        }
+        if (!policy.enabled || policy.mode == BridgeMode.OFF) {
+            return BridgeDecision(false, BridgeResult.UNAVAILABLE, "bridge_disabled")
+        }
+
+        val permission = dangerousPermissionFor(bridge, policy.mode)
+        if (permission != null) {
+            val granted = permissionGateway.request(permission, reason.copy(permission = permission))
+            if (!granted) return BridgeDecision(false, BridgeResult.DENIED, "permission_denied")
+        }
+
+        return BridgeDecision(true, BridgeResult.ALLOWED, "allowed")
+    }
+}
+```
+
+Off/unsupported path는 permissionGateway를 호출하면 안 된다.
+
+```kotlin
+@Test
+fun unsupportedCameraDoesNotRequestPermission() = runTest {
+    val gateway = RecordingPermissionGateway()
+    val decision = brokerWith(gateway).decide(
+        instanceId = "vm1",
+        bridge = BridgeType.CAMERA,
+        operation = "open",
+        reason = PermissionReason(BridgeType.CAMERA, "open", "android.permission.CAMERA", "Camera"),
+    )
+
+    assertEquals(BridgeResult.UNSUPPORTED, decision.result)
+    assertTrue(gateway.requests.isEmpty())
+}
+```
+
 ### 완료 기준
 
 - Off 상태 request는 host API를 호출하지 않는다.
@@ -381,6 +672,78 @@ interface PermissionBroker {
 - 개인정보 payload는 log에 직접 저장하지 않는다.
 - Log size cap과 rotation을 적용한다.
 - Policy 변경 이벤트도 기록한다.
+
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeAuditEntry.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeAuditLog.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/BridgeAuditLogTest.kt
+```
+
+Audit entry는 result와 reason 중심으로 저장하고 payload 원문을 제외한다.
+
+```kotlin
+data class BridgeAuditEntry(
+    val timeMillis: Long,
+    val instanceId: String,
+    val bridge: BridgeType,
+    val operation: String,
+    val allowed: Boolean,
+    val result: BridgeResult,
+    val reason: String,
+)
+
+class BridgeAuditLog(
+    private val instanceRoot: File,
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val maxEntries: Int = 500,
+) {
+    private val logFile = File(instanceRoot, "bridge-audit.jsonl")
+
+    fun append(entry: BridgeAuditEntry) {
+        logFile.parentFile?.mkdirs()
+        logFile.appendText(encode(entry) + "\n")
+        rotateIfNeeded()
+    }
+
+    fun appendDecision(
+        instanceId: String,
+        bridge: BridgeType,
+        operation: String,
+        decision: BridgeDecision,
+    ) = append(
+        BridgeAuditEntry(
+            timeMillis = clock(),
+            instanceId = instanceId,
+            bridge = bridge,
+            operation = operation,
+            allowed = decision.allowed,
+            result = decision.result,
+            reason = decision.reason,
+        ),
+    )
+}
+```
+
+Redaction test는 clipboard/location 원문이 log에 들어가지 않음을 확인한다.
+
+```kotlin
+@Test
+fun auditLogDoesNotPersistSensitivePayload() {
+    auditLog.appendDecision(
+        instanceId = "vm1",
+        bridge = BridgeType.CLIPBOARD,
+        operation = "guest_to_host",
+        decision = BridgeDecision(false, BridgeResult.DENIED, "payload_too_large"),
+    )
+
+    val rawLog = File(instanceRoot, "bridge-audit.jsonl").readText()
+    assertFalse(rawLog.contains("secret clipboard text"))
+}
+```
 
 ### 완료 기준
 
@@ -410,6 +773,74 @@ Guest/native runtime request가 Kotlin bridge layer와 같은 policy/audit path�
 - Dispatcher 결과를 native package/runtime status JSON에 포함한다.
 - Guest-facing response는 항상 result code와 message를 포함한다.
 
+### 코드 변경 예시
+
+권장 변경 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeDispatcher.kt
+app/src/main/java/dev/jongwoo/androidvm/vm/VmNativeBridge.kt
+app/src/main/cpp/vm_native_bridge.cpp
+app/src/test/java/dev/jongwoo/androidvm/bridge/BridgeDispatcherTest.kt
+```
+
+Kotlin dispatcher는 모든 bridge request가 broker와 audit log를 지나도록 만든다.
+
+```kotlin
+class BridgeDispatcher(
+    private val broker: PermissionBroker,
+    private val auditLog: BridgeAuditLog,
+    private val handlers: Map<BridgeType, BridgeHandler>,
+) {
+    suspend fun dispatch(request: BridgeRequest): BridgeResponse {
+        val decision = broker.decide(
+            instanceId = request.instanceId,
+            bridge = request.bridge,
+            operation = request.operation,
+            reason = request.reason,
+        )
+        auditLog.appendDecision(request.instanceId, request.bridge, request.operation, decision)
+
+        if (!decision.allowed) {
+            return BridgeResponse(decision.result, decision.reason, payloadJson = "{}")
+        }
+
+        val handler = handlers[request.bridge]
+            ?: return BridgeResponse(BridgeResult.UNSUPPORTED, "handler_missing", "{}")
+        return handler.handle(request)
+    }
+}
+```
+
+Native boundary는 JSON 문자열을 주고받는 얇은 entry point로 둔다.
+
+```kotlin
+object VmNativeBridge {
+    external fun dispatchBridgeRequest(
+        instanceId: String,
+        bridge: String,
+        operation: String,
+        payloadJson: String,
+    ): String
+}
+```
+
+C++ status JSON에는 마지막 bridge decision을 포함한다.
+
+```cpp
+struct BridgeRuntimeState {
+    std::string lastBridge;
+    std::string lastOperation;
+    std::string lastResult;
+    std::string lastReason;
+    int64_t requestCount = 0;
+};
+
+// packageOperationStatusJson 또는 runtime status JSON에 포함
+os << "\"lastBridge\":\"" << escapeJson(instance.lastBridge) << "\","
+   << "\"lastBridgeResult\":\"" << escapeJson(instance.lastBridgeResult) << "\",";
+```
+
 ### 완료 기준
 
 - Native request가 policy off 상태에서 host API를 호출하지 않는다.
@@ -437,6 +868,74 @@ Guest/native runtime request가 Kotlin bridge layer와 같은 policy/audit path�
 - Dangerous permission이 필요한 mode를 켤 때 reason UI를 표시한다.
 - Audit log list와 clear action을 제공한다.
 - Unsupported bridge는 disabled 상태와 이유를 명확히 표시한다.
+
+### 코드 변경 예시
+
+권장 추가/변경 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/BridgeSettingsViewModel.kt
+app/src/main/java/dev/jongwoo/androidvm/ui/BridgeSettingsScreen.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/BridgeSettingsViewModelTest.kt
+```
+
+UI는 policy store를 직접 만지지 않고 ViewModel state/action으로 다룬다.
+
+```kotlin
+data class BridgeSettingsState(
+    val policies: Map<BridgeType, BridgePolicy>,
+    val auditEntries: List<BridgeAuditEntry>,
+    val pendingPermissionReason: PermissionReason? = null,
+)
+
+sealed interface BridgeSettingsAction {
+    data class SetPolicy(val bridge: BridgeType, val mode: BridgeMode) : BridgeSettingsAction
+    data object ClearAuditLog : BridgeSettingsAction
+    data object ResetPolicies : BridgeSettingsAction
+}
+
+class BridgeSettingsViewModel(
+    private val policyStore: BridgePolicyStore,
+    private val auditLog: BridgeAuditLog,
+) : ViewModel() {
+    private val _state = MutableStateFlow(loadState())
+    val state: StateFlow<BridgeSettingsState> = _state
+
+    fun onAction(action: BridgeSettingsAction) {
+        when (action) {
+            is BridgeSettingsAction.SetPolicy -> updatePolicy(action.bridge, action.mode)
+            BridgeSettingsAction.ClearAuditLog -> clearAuditLog()
+            BridgeSettingsAction.ResetPolicies -> resetPolicies()
+        }
+    }
+}
+```
+
+Compose screen 예시는 bridge별 mode selector와 unsupported disabled state를 분리한다.
+
+```kotlin
+@Composable
+fun BridgeSettingsScreen(
+    state: BridgeSettingsState,
+    onAction: (BridgeSettingsAction) -> Unit,
+) {
+    BridgeSection(title = "Privacy") {
+        BridgeModeRow(
+            label = "Clipboard",
+            policy = state.policies.getValue(BridgeType.CLIPBOARD),
+            modes = listOf(
+                BridgeMode.OFF,
+                BridgeMode.CLIPBOARD_HOST_TO_GUEST,
+                BridgeMode.CLIPBOARD_GUEST_TO_HOST,
+                BridgeMode.CLIPBOARD_BIDIRECTIONAL,
+            ),
+            onModeChange = { onAction(BridgeSettingsAction.SetPolicy(BridgeType.CLIPBOARD, it)) },
+        )
+        UnsupportedBridgeRow(label = "Camera")
+        UnsupportedBridgeRow(label = "Microphone")
+    }
+}
+```
 
 ### UI 구조
 
@@ -483,6 +982,72 @@ Guest에 host 실제 식별자를 노출하지 않고 synthetic device profile�
 - Manufacturer, model, brand 등 synthetic profile을 반환한다.
 - Phone number, IMEI, SIM serial, advertising ID는 빈 값 또는 unknown으로 반환한다.
 - Host installed package list를 device profile에 포함하지 않는다.
+
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/DeviceProfileBridge.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/DeviceProfileBridgeTest.kt
+```
+
+Synthetic profile은 instance별 seed를 저장해 restart 후에도 안정적으로 유지한다.
+
+```kotlin
+data class SyntheticDeviceProfile(
+    val manufacturer: String = "CleanRoom",
+    val model: String = "VirtualPhone",
+    val brand: String = "CleanRoom",
+    val androidId: String,
+    val serial: String = "unknown",
+    val phoneNumber: String = "",
+    val imei: String = "",
+)
+
+class DeviceProfileBridge(
+    private val instanceRoot: File,
+    private val auditLog: BridgeAuditLog,
+) : BridgeHandler {
+    override suspend fun handle(request: BridgeRequest): BridgeResponse {
+        val profile = SyntheticDeviceProfile(androidId = loadOrCreateAndroidId())
+        auditLog.appendDecision(
+            request.instanceId,
+            BridgeType.DEVICE_PROFILE,
+            request.operation,
+            BridgeDecision(true, BridgeResult.ALLOWED, "synthetic_profile"),
+        )
+        return BridgeResponse(
+            result = BridgeResult.ALLOWED,
+            reason = "synthetic_profile",
+            payloadJson = encodeProfile(profile),
+        )
+    }
+
+    private fun loadOrCreateAndroidId(): String {
+        val file = File(instanceRoot, "synthetic-android-id")
+        if (file.exists()) return file.readText().trim()
+        val id = UUID.randomUUID().toString().replace("-", "")
+        file.writeText(id)
+        return id
+    }
+}
+```
+
+Host identity denylist test는 profile JSON에 금지 필드가 들어가지 않음을 확인한다.
+
+```kotlin
+@Test
+fun syntheticProfileDoesNotExposeHostIdentity() = runTest {
+    val response = bridge.handle(deviceProfileRequest())
+    val payload = JSONObject(response.payloadJson)
+
+    assertEquals("", payload.getString("phoneNumber"))
+    assertEquals("", payload.getString("imei"))
+    assertFalse(payload.has("advertisingId"))
+    assertFalse(payload.has("hostInstalledPackages"))
+}
+```
 
 ### Synthetic profile 예
 
@@ -539,6 +1104,69 @@ Guest에 host 실제 식별자를 노출하지 않고 synthetic device profile�
 - 기본 network는 `INTERNET`만 사용한다.
 - SOCKS5, DNS proxy, VpnService, per-instance routing은 후속으로 둔다.
 
+### 코드 변경 예시
+
+권장 추가/변경 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/AudioOutputBridge.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/VibrationBridge.kt
+app/src/main/java/dev/jongwoo/androidvm/bridge/NetworkBridge.kt
+app/src/main/cpp/vm_native_bridge.cpp
+app/src/test/java/dev/jongwoo/androidvm/bridge/OutputAndNetworkBridgeTest.kt
+```
+
+Audio output은 Stage 05 audio path 앞에서 policy gate를 확인한다.
+
+```kotlin
+class AudioOutputBridge(
+    private val policyStore: BridgePolicyStore,
+    private val audioSink: AudioSink,
+) {
+    fun writePcm(instanceId: String, pcm: ShortArray): BridgeDecision {
+        val policy = policyStore.load().getValue(BridgeType.AUDIO_OUTPUT)
+        if (!policy.enabled) {
+            return BridgeDecision(false, BridgeResult.UNAVAILABLE, "audio_output_disabled")
+        }
+        audioSink.write(pcm)
+        return BridgeDecision(true, BridgeResult.ALLOWED, "audio_output_written")
+    }
+}
+```
+
+Vibration은 duration cap을 적용한 뒤 host vibrator를 호출한다.
+
+```kotlin
+class VibrationBridge(
+    private val policyStore: BridgePolicyStore,
+    private val vibrator: HostVibrator,
+    private val maxDurationMs: Long = 500,
+) {
+    fun vibrate(instanceId: String, durationMs: Long): BridgeDecision {
+        val policy = policyStore.load().getValue(BridgeType.VIBRATION)
+        if (!policy.enabled) {
+            return BridgeDecision(false, BridgeResult.UNAVAILABLE, "vibration_disabled")
+        }
+        vibrator.vibrate(durationMs.coerceIn(1, maxDurationMs))
+        return BridgeDecision(true, BridgeResult.ALLOWED, "vibration_started")
+    }
+}
+```
+
+Network disabled path는 guest request를 즉시 unavailable로 끝낸다.
+
+```kotlin
+class NetworkBridge(private val policyStore: BridgePolicyStore) : BridgeHandler {
+    override suspend fun handle(request: BridgeRequest): BridgeResponse {
+        val policy = policyStore.load().getValue(BridgeType.NETWORK)
+        if (!policy.enabled) {
+            return BridgeResponse(BridgeResult.UNAVAILABLE, "network_disabled", "{}")
+        }
+        return BridgeResponse(BridgeResult.ALLOWED, "network_enabled", "{}")
+    }
+}
+```
+
 ### 완료 기준
 
 - Audio off/mute 상태에서 host audio output이 발생하지 않는다.
@@ -577,6 +1205,73 @@ bidirectional
 - Size limit을 적용한다.
 - Sensitive content timeout을 적용한다.
 - Clipboard payload 원문은 audit log에 저장하지 않는다.
+
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/ClipboardBridge.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/ClipboardBridgeTest.kt
+```
+
+Clipboard bridge는 mode별 방향을 명시적으로 검사한다.
+
+```kotlin
+class ClipboardBridge(
+    private val policyStore: BridgePolicyStore,
+    private val hostClipboard: HostClipboard,
+    private val maxBytes: Int = 16 * 1024,
+) {
+    fun hostToGuest(instanceId: String): BridgeResponse {
+        val policy = policyStore.load().getValue(BridgeType.CLIPBOARD)
+        if (policy.mode !in setOf(
+                BridgeMode.CLIPBOARD_HOST_TO_GUEST,
+                BridgeMode.CLIPBOARD_BIDIRECTIONAL,
+            )
+        ) {
+            return BridgeResponse(BridgeResult.UNAVAILABLE, "clipboard_host_to_guest_disabled", "{}")
+        }
+
+        val text = hostClipboard.getPlainText()
+            ?: return BridgeResponse(BridgeResult.UNAVAILABLE, "clipboard_empty_or_non_text", "{}")
+        if (text.toByteArray().size > maxBytes) {
+            return BridgeResponse(BridgeResult.DENIED, "clipboard_too_large", "{}")
+        }
+        return BridgeResponse(BridgeResult.ALLOWED, "clipboard_delivered", jsonText(text))
+    }
+
+    fun guestToHost(instanceId: String, text: String): BridgeDecision {
+        val policy = policyStore.load().getValue(BridgeType.CLIPBOARD)
+        if (policy.mode !in setOf(
+                BridgeMode.CLIPBOARD_GUEST_TO_HOST,
+                BridgeMode.CLIPBOARD_BIDIRECTIONAL,
+            )
+        ) {
+            return BridgeDecision(false, BridgeResult.UNAVAILABLE, "clipboard_guest_to_host_disabled")
+        }
+        if (text.toByteArray().size > maxBytes) {
+            return BridgeDecision(false, BridgeResult.DENIED, "clipboard_too_large")
+        }
+        hostClipboard.setPlainText(text)
+        return BridgeDecision(true, BridgeResult.ALLOWED, "clipboard_written")
+    }
+}
+```
+
+Mode test는 반대 방향이 새지 않는지 확인한다.
+
+```kotlin
+@Test
+fun hostToGuestModeDoesNotAllowGuestToHostWrite() {
+    store.save(policy(BridgeType.CLIPBOARD, BridgeMode.CLIPBOARD_HOST_TO_GUEST))
+
+    val decision = bridge.guestToHost("vm1", "guest text")
+
+    assertEquals(BridgeResult.UNAVAILABLE, decision.result)
+    assertNull(hostClipboard.lastWrittenText)
+}
+```
 
 ### 완료 기준
 
@@ -618,6 +1313,75 @@ host_real_location
 - Update interval과 precision policy를 적용한다.
 - Provider unavailable fallback을 처리한다.
 
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/LocationBridge.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/LocationBridgeTest.kt
+```
+
+Fixed location은 permissionGateway를 거치지 않고 configured coordinate만 반환한다.
+
+```kotlin
+data class GuestLocation(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Float,
+)
+
+class LocationBridge(
+    private val policyStore: BridgePolicyStore,
+    private val permissionGateway: PermissionRequestGateway,
+    private val hostLocationProvider: HostLocationProvider,
+) : BridgeHandler {
+    override suspend fun handle(request: BridgeRequest): BridgeResponse {
+        val policy = policyStore.load().getValue(BridgeType.LOCATION)
+        return when (policy.mode) {
+            BridgeMode.OFF -> BridgeResponse(BridgeResult.UNAVAILABLE, "location_disabled", "{}")
+            BridgeMode.LOCATION_FIXED -> fixedLocation(policy)
+            BridgeMode.LOCATION_HOST_REAL -> realLocation(request)
+            else -> BridgeResponse(BridgeResult.UNSUPPORTED, "location_mode_unsupported", "{}")
+        }
+    }
+
+    private fun fixedLocation(policy: BridgePolicy): BridgeResponse {
+        val location = GuestLocation(
+            latitude = policy.options.getValue("latitude").toDouble(),
+            longitude = policy.options.getValue("longitude").toDouble(),
+            accuracyMeters = policy.options["accuracyMeters"]?.toFloat() ?: 50f,
+        )
+        return BridgeResponse(BridgeResult.ALLOWED, "fixed_location", encodeLocation(location))
+    }
+
+    private suspend fun realLocation(request: BridgeRequest): BridgeResponse {
+        val granted = permissionGateway.request(
+            "android.permission.ACCESS_FINE_LOCATION",
+            request.reason,
+        )
+        if (!granted) return BridgeResponse(BridgeResult.DENIED, "location_permission_denied", "{}")
+        val location = hostLocationProvider.currentLocation()
+            ?: return BridgeResponse(BridgeResult.UNAVAILABLE, "location_provider_unavailable", "{}")
+        return BridgeResponse(BridgeResult.ALLOWED, "host_location", encodeLocation(location))
+    }
+}
+```
+
+Fixed mode test는 permission 요청이 없어야 한다.
+
+```kotlin
+@Test
+fun fixedLocationDoesNotRequestHostPermission() = runTest {
+    store.save(fixedLocationPolicy(latitude = 37.5665, longitude = 126.9780))
+
+    val response = bridge.handle(locationRequest())
+
+    assertEquals(BridgeResult.ALLOWED, response.result)
+    assertTrue(permissionGateway.requests.isEmpty())
+}
+```
+
 ### 완료 기준
 
 - Off 상태에서 host location API를 호출하지 않는다.
@@ -648,6 +1412,48 @@ Camera와 microphone을 Stage 07 MVP에서 안전하게 off/unsupported로 고�
 - Camera/microphone request는 host permission을 자동 요청하지 않는다.
 - Settings UI에는 unsupported 상태와 후속 구현 필요성을 표시한다.
 - Native dispatcher와 audit log는 camera/microphone request를 기록한다.
+
+### 코드 변경 예시
+
+권장 추가 파일:
+
+```text
+app/src/main/java/dev/jongwoo/androidvm/bridge/UnsupportedMediaBridge.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/UnsupportedMediaBridgeTest.kt
+```
+
+Camera/microphone은 Stage 07에서 permission prompt 없이 unsupported response만 반환한다.
+
+```kotlin
+class UnsupportedMediaBridge(
+    private val bridgeType: BridgeType,
+) : BridgeHandler {
+    init {
+        require(bridgeType == BridgeType.CAMERA || bridgeType == BridgeType.MICROPHONE)
+    }
+
+    override suspend fun handle(request: BridgeRequest): BridgeResponse {
+        return BridgeResponse(
+            result = BridgeResult.UNSUPPORTED,
+            reason = "${bridgeType.name.lowercase()}_unsupported_stage7_mvp",
+            payloadJson = "{}",
+        )
+    }
+}
+```
+
+Permission boundary test는 `CAMERA`/`RECORD_AUDIO` 요청이 발생하지 않음을 확인한다.
+
+```kotlin
+@Test
+fun cameraUnsupportedDoesNotRequestCameraPermission() = runTest {
+    val gateway = RecordingPermissionGateway()
+    val response = cameraBridge.handle(cameraOpenRequest(permissionGateway = gateway))
+
+    assertEquals(BridgeResult.UNSUPPORTED, response.result)
+    assertTrue(gateway.requests.none { it.permission == "android.permission.CAMERA" })
+}
+```
 
 ### 완료 기준
 
@@ -702,6 +1508,119 @@ Stage 07의 모든 최종 목표를 자동 진단과 regression gate로 검증�
 - Camera/microphone unsupported boundary test
 - Settings UI model test
 - Stage 06 package install/launch regression test
+
+### 코드 변경 예시
+
+권장 추가/변경 파일:
+
+```text
+app/src/debug/AndroidManifest.xml
+app/src/debug/java/dev/jongwoo/androidvm/debug/Stage7DiagnosticsReceiver.kt
+app/src/test/java/dev/jongwoo/androidvm/bridge/Stage7FinalGateTest.kt
+```
+
+Debug receiver는 각 step의 결과를 한 줄씩 남기고 마지막에 통합 결과를 출력한다.
+
+```kotlin
+class Stage7DiagnosticsReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != ACTION_RUN_STAGE7_DIAGNOSTICS) return
+
+        val manifest = verifyManifest(context)
+        val policy = verifyPolicy(context)
+        val broker = verifyBroker(context)
+        val audit = verifyAudit(context)
+        val dispatcher = verifyDispatcher(context)
+        val ui = verifyUiModel(context)
+        val deviceProfile = verifyDeviceProfile(context)
+        val output = verifyOutputBridges(context)
+        val clipboard = verifyClipboard(context)
+        val location = verifyLocation(context)
+        val unsupportedMedia = verifyUnsupportedMedia(context)
+        val regressions = verifyStage4Stage5Stage6Regressions(context)
+
+        Log.i(TAG, "STAGE7_MANIFEST_RESULT passed=$manifest")
+        Log.i(TAG, "STAGE7_POLICY_RESULT passed=$policy")
+        Log.i(TAG, "STAGE7_BROKER_RESULT passed=$broker")
+        Log.i(TAG, "STAGE7_AUDIT_RESULT passed=$audit")
+        Log.i(TAG, "STAGE7_DISPATCHER_RESULT passed=$dispatcher")
+        Log.i(TAG, "STAGE7_UI_RESULT passed=$ui")
+        Log.i(TAG, "STAGE7_DEVICE_PROFILE_RESULT passed=$deviceProfile")
+        Log.i(TAG, "STAGE7_OUTPUT_RESULT passed=$output")
+        Log.i(TAG, "STAGE7_CLIPBOARD_RESULT passed=$clipboard")
+        Log.i(TAG, "STAGE7_LOCATION_RESULT passed=$location")
+        Log.i(TAG, "STAGE7_UNSUPPORTED_MEDIA_RESULT passed=$unsupportedMedia")
+        Log.i(TAG, "STAGE7_REGRESSION_RESULT passed=$regressions stage4=true stage5=true stage6=true")
+
+        val passed = listOf(
+            manifest,
+            policy,
+            broker,
+            audit,
+            dispatcher,
+            ui,
+            deviceProfile,
+            output,
+            clipboard,
+            location,
+            unsupportedMedia,
+            regressions,
+        ).all { it }
+
+        Log.i(
+            TAG,
+            "STAGE7_RESULT passed=$passed manifest=$manifest policy=$policy " +
+                "broker=$broker audit=$audit dispatcher=$dispatcher ui=$ui " +
+                "deviceProfile=$deviceProfile output=$output clipboard=$clipboard " +
+                "location=$location unsupportedMedia=$unsupportedMedia regressions=$regressions",
+        )
+    }
+
+    companion object {
+        private const val TAG = "AVM.Stage7Diag"
+        private const val ACTION_RUN_STAGE7_DIAGNOSTICS =
+            "dev.jongwoo.androidvm.debug.RUN_STAGE7_DIAGNOSTICS"
+    }
+}
+```
+
+최종 gate test는 diagnostics log format이 문서와 어긋나지 않도록 고정한다.
+
+```kotlin
+@Test
+fun stage7ResultLineContainsAllFinalGateFields() {
+    val line = Stage7ResultLine(
+        manifest = true,
+        policy = true,
+        broker = true,
+        audit = true,
+        dispatcher = true,
+        ui = true,
+        deviceProfile = true,
+        output = true,
+        clipboard = true,
+        location = true,
+        unsupportedMedia = true,
+        regressions = true,
+    ).format()
+
+    listOf(
+        "passed=true",
+        "manifest=true",
+        "policy=true",
+        "broker=true",
+        "audit=true",
+        "dispatcher=true",
+        "ui=true",
+        "deviceProfile=true",
+        "output=true",
+        "clipboard=true",
+        "location=true",
+        "unsupportedMedia=true",
+        "regressions=true",
+    ).forEach { assertTrue(line.contains(it)) }
+}
+```
 
 ### Emulator 진단
 
