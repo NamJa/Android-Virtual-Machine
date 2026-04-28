@@ -1,6 +1,6 @@
 package dev.jongwoo.androidvm.vm
 
-import dev.jongwoo.androidvm.bridge.BridgePolicy
+import dev.jongwoo.androidvm.bridge.LegacyBridgePolicy
 import dev.jongwoo.androidvm.storage.InstancePaths
 import org.json.JSONObject
 
@@ -9,7 +9,7 @@ data class VmConfig(
     val runtime: RuntimeConfig,
     val display: DisplayConfig,
     val paths: GuestPathConfig,
-    val bridgePolicy: BridgePolicy = BridgePolicy(),
+    val bridgePolicy: LegacyBridgePolicy = LegacyBridgePolicy(),
 ) {
     fun toJson(): String = JSONObject()
         .put("instanceId", instanceId)

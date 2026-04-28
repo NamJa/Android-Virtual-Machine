@@ -198,6 +198,15 @@ struct Instance {
     bool venusReady = false;
     bool framebufferDirty = false;
     bool audioMuted = false;
+    std::string lastBridge;
+    std::string lastBridgeOperation;
+    std::string lastBridgeResult;
+    std::string lastBridgeReason;
+    int64_t bridgeRequestCount = 0;
+    int64_t bridgeAllowedCount = 0;
+    int64_t bridgeDeniedCount = 0;
+    int64_t bridgeUnavailableCount = 0;
+    int64_t bridgeUnsupportedCount = 0;
     ANativeWindow* window = nullptr;
     std::thread renderThread;
     std::thread guestThread;
@@ -2629,7 +2638,28 @@ std::string packageOperationStatusJson(const Instance& instance) {
        << "\"foregroundPid\":" << instance.foregroundPid << ','
        << "\"foregroundAppProcessRunning\":" << (instance.foregroundAppProcessRunning ? "true" : "false") << ','
        << "\"foregroundWindowAttached\":" << (instance.foregroundWindowAttached ? "true" : "false") << ','
-       << "\"foregroundLaunchMode\":\"" << escapeJson(instance.foregroundLaunchMode) << "\"";
+       << "\"foregroundLaunchMode\":\"" << escapeJson(instance.foregroundLaunchMode) << "\","
+       << "\"lastBridge\":\"" << escapeJson(instance.lastBridge) << "\","
+       << "\"lastBridgeOperation\":\"" << escapeJson(instance.lastBridgeOperation) << "\","
+       << "\"lastBridgeResult\":\"" << escapeJson(instance.lastBridgeResult) << "\","
+       << "\"lastBridgeReason\":\"" << escapeJson(instance.lastBridgeReason) << "\","
+       << "\"bridgeRequestCount\":" << instance.bridgeRequestCount;
+    os << '}';
+    return os.str();
+}
+
+std::string bridgeRuntimeStatusJson(const Instance& instance) {
+    std::ostringstream os;
+    os << '{';
+    os << "\"lastBridge\":\"" << escapeJson(instance.lastBridge) << "\","
+       << "\"lastOperation\":\"" << escapeJson(instance.lastBridgeOperation) << "\","
+       << "\"lastResult\":\"" << escapeJson(instance.lastBridgeResult) << "\","
+       << "\"lastReason\":\"" << escapeJson(instance.lastBridgeReason) << "\","
+       << "\"requestCount\":" << instance.bridgeRequestCount << ','
+       << "\"allowedCount\":" << instance.bridgeAllowedCount << ','
+       << "\"deniedCount\":" << instance.bridgeDeniedCount << ','
+       << "\"unavailableCount\":" << instance.bridgeUnavailableCount << ','
+       << "\"unsupportedCount\":" << instance.bridgeUnsupportedCount;
     os << '}';
     return os.str();
 }
@@ -3198,4 +3228,74 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getPackageOperationStatus(
         payload = packageOperationStatusJson(*instance);
     }
     return env->NewStringUTF(payload.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_publishBridgeResult(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring bridge,
+    jstring operation,
+    jstring result,
+    jstring reason,
+    jstring payloadJson
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto bridgeName = ScopedUtfChars(env, bridge).str();
+    const auto op = ScopedUtfChars(env, operation).str();
+    const auto resultText = ScopedUtfChars(env, result).str();
+    const auto reasonText = ScopedUtfChars(env, reason).str();
+    (void) ScopedUtfChars(env, payloadJson).str(); // payload is intentionally not stored
+
+    auto instance = findInstance(id);
+    if (!instance) {
+        std::ostringstream err;
+        err << "{\"result\":\"unsupported\",\"reason\":\"unknown_instance\","
+            << "\"requestCount\":0}";
+        return env->NewStringUTF(err.str().c_str());
+    }
+
+    std::string snapshot;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastBridge = bridgeName;
+        instance->lastBridgeOperation = op;
+        instance->lastBridgeResult = resultText;
+        instance->lastBridgeReason = reasonText;
+        instance->bridgeRequestCount++;
+        if (resultText == "allowed") {
+            instance->bridgeAllowedCount++;
+        } else if (resultText == "denied") {
+            instance->bridgeDeniedCount++;
+        } else if (resultText == "unavailable") {
+            instance->bridgeUnavailableCount++;
+        } else if (resultText == "unsupported") {
+            instance->bridgeUnsupportedCount++;
+        }
+        snapshot = bridgeRuntimeStatusJson(*instance);
+    }
+    appendInstanceLog(
+        instance,
+        "bridge dispatch bridge=" + bridgeName + " op=" + op +
+            " result=" + resultText + " reason=" + reasonText
+    );
+    return env->NewStringUTF(snapshot.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getBridgeRuntimeStatus(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) return env->NewStringUTF("{}");
+    std::string snapshot;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        snapshot = bridgeRuntimeStatusJson(*instance);
+    }
+    return env->NewStringUTF(snapshot.c_str());
 }

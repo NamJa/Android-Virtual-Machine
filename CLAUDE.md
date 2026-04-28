@@ -27,7 +27,11 @@ adb shell am broadcast -a dev.jongwoo.androidvm.debug.RUN_STAGE4_DIAGNOSTICS \
     -n dev.jongwoo.androidvm/.debug.Stage4DiagnosticsReceiver
 adb shell am broadcast -a dev.jongwoo.androidvm.debug.RUN_STAGE5_DIAGNOSTICS \
     -n dev.jongwoo.androidvm/.debug.Stage5DiagnosticsReceiver
-# Inspect with: adb logcat -s AVM.Stage4Diag AVM.Stage5Diag AVM.Native
+adb shell am broadcast -a dev.jongwoo.androidvm.debug.RUN_STAGE6_DIAGNOSTICS \
+    -n dev.jongwoo.androidvm/.debug.Stage6DiagnosticsReceiver
+adb shell am broadcast -a dev.jongwoo.androidvm.debug.RUN_STAGE7_DIAGNOSTICS \
+    -n dev.jongwoo.androidvm/.debug.Stage7DiagnosticsReceiver
+# Inspect with: adb logcat -s AVM.Stage4Diag AVM.Stage5Diag AVM.Stage6Diag AVM.Stage7Diag AVM.Native
 ```
 
 Each diagnostic receiver logs a single `STAGE{n}_RESULT passed=...` line plus per-subcheck lines; readiness docs treat these as the canonical pass criteria.
@@ -61,7 +65,23 @@ The runtime is deliberately *not* a kernel/QEMU emulator. Stage 04 builds a path
 
 ### Bridge policy
 
-`BridgePolicy` (Kotlin) is the privacy boundary: anything that can leak host signals to the guest (clipboard, contacts, files, location, microphone) defaults to **off**, while output-only bridges (`audioOutput`, `vibration`) default on. The policy is serialized into `vm_config.json` and consulted on the native side; access attempts are appended to `avm/logs/bridge-audit.log` via `BridgeAuditLog` (installed in `MainApplication.onCreate`). When adding a bridge, default to off, gate it on the matching `BridgeKind`, and emit an audit entry on every access — including denials.
+Stage 07 introduced the privacy boundary as a per-instance, per-bridge policy stored at
+`<instance>/bridge-policy.json` and read through `BridgePolicyStore`. Each bridge has a
+`BridgePolicy(bridge, mode, enabled, options)` record; defaults live in
+`DefaultBridgePolicies.all`. Privacy-sensitive bridges (`CLIPBOARD`, `LOCATION`, `CAMERA`,
+`MICROPHONE`) default off; `CAMERA` and `MICROPHONE` are explicitly `UNSUPPORTED` for the
+Stage 07 MVP and never request host runtime permissions. Output-only bridges
+(`AUDIO_OUTPUT`, `VIBRATION`, `NETWORK`, `DEVICE_PROFILE`) default on but can be toggled
+per instance.
+
+Every bridge request flows through `BridgeDispatcher` -> `DefaultPermissionBroker` ->
+`BridgeAuditLog`. The broker is the only place that may call into a host runtime permission
+prompt, and it does so only via `PermissionRequestGateway`. Off / unsupported bridges never
+reach the gateway. Audit entries (`<instance>/bridge-audit.jsonl`) record bridge / operation
+/ result / reason but never the raw payload (clipboard text, location coordinates, etc.).
+`Stage7BridgeScope.forbiddenManifestPermissions` and the `ManifestPermissionGuardTest` lock
+the manifest denylist; `Stage7Diagnostics` runs the full gate from a unit test or the
+`Stage7DiagnosticsReceiver` (`STAGE7_RESULT passed=true ...`).
 
 ## Conventions worth knowing
 

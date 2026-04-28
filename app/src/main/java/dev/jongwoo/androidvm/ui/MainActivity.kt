@@ -37,11 +37,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
 import dev.jongwoo.androidvm.apk.ApkImportRequest
 import dev.jongwoo.androidvm.apk.ApkInstallPipeline
 import dev.jongwoo.androidvm.apk.ApkStager
 import dev.jongwoo.androidvm.apk.GuestPackageInfo
+import dev.jongwoo.androidvm.bridge.BridgeAuditLog
+import dev.jongwoo.androidvm.bridge.BridgePolicyStore
+import dev.jongwoo.androidvm.bridge.BridgeSettingsViewModel
 import dev.jongwoo.androidvm.storage.InstanceStore
+import dev.jongwoo.androidvm.storage.PathLayout
 import dev.jongwoo.androidvm.storage.RomInstaller
 import dev.jongwoo.androidvm.storage.RomPipelineSnapshot
 import dev.jongwoo.androidvm.ui.theme.AvmAppTheme
@@ -60,14 +65,62 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AvmAppTheme {
-                MainScreen(config = config)
+                AppRoot(config = config)
             }
         }
     }
 }
 
 @Composable
-private fun MainScreen(config: VmConfig) {
+private fun AppRoot(config: VmConfig) {
+    val context = LocalContext.current
+    var showBridgeSettings by remember { mutableStateOf(false) }
+    val bridgeViewModel = remember(config.instanceId) {
+        val instanceRoot = PathLayout(context)
+            .ensureInstance(config.instanceId)
+            .root
+        BridgeSettingsViewModel(
+            instanceId = config.instanceId,
+            policyStore = BridgePolicyStore(instanceRoot) { reason ->
+                BridgeAuditLog(instanceRoot).appendPolicyRecovery(config.instanceId, reason)
+            },
+            auditLog = BridgeAuditLog(instanceRoot),
+        )
+    }
+    if (showBridgeSettings) {
+        val state by bridgeViewModel.state.collectAsState()
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Bridge Privacy",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(onClick = { showBridgeSettings = false }) { Text("Close") }
+                }
+                BridgeSettingsScreen(viewModel = bridgeViewModel, state = state)
+            }
+        }
+    } else {
+        MainScreen(
+            config = config,
+            onOpenBridgeSettings = { showBridgeSettings = true },
+        )
+    }
+}
+
+@Composable
+private fun MainScreen(
+    config: VmConfig,
+    onOpenBridgeSettings: () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val romInstaller = remember(context) { RomInstaller(context) }
@@ -281,9 +334,8 @@ private fun MainScreen(config: VmConfig) {
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Text("Audio: ${config.bridgePolicy.audioOutput}, Vibration: ${config.bridgePolicy.vibration}")
-                    Text("Clipboard: ${config.bridgePolicy.clipboard}, Files: ${config.bridgePolicy.files}")
-                    Text("Location: ${config.bridgePolicy.location}, Microphone: ${config.bridgePolicy.microphone}")
+                    Text("Privacy-sensitive bridges default off. Toggle them per instance.")
+                    Button(onClick = onOpenBridgeSettings) { Text("Open Privacy Settings") }
                 }
             }
 

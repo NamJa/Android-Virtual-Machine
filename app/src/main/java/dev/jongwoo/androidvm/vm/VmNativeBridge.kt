@@ -136,4 +136,17 @@ object VmNativeBridge {
 
     @JvmStatic
     external fun getPackageOperationStatus(instanceId: String): String
+
+    @JvmStatic
+    external fun publishBridgeResult(
+        instanceId: String,
+        bridge: String,
+        operation: String,
+        result: String,
+        reason: String,
+        payloadJson: String,
+    ): String
+
+    @JvmStatic
+    external fun getBridgeRuntimeStatus(instanceId: String): String
 }
