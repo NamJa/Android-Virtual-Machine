@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -105,7 +107,11 @@ private fun AppRoot(config: VmConfig) {
                     )
                     OutlinedButton(onClick = { showBridgeSettings = false }) { Text("Close") }
                 }
-                BridgeSettingsScreen(viewModel = bridgeViewModel, state = state)
+                BridgeSettingsScreen(
+                    viewModel = bridgeViewModel,
+                    state = state,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     } else {
@@ -174,6 +180,7 @@ private fun MainScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

@@ -34,10 +34,11 @@ import dev.jongwoo.androidvm.bridge.BridgeSupport
 fun BridgeSettingsScreen(
     viewModel: BridgeSettingsViewModel,
     state: BridgeSettingsState,
+    modifier: Modifier = Modifier,
 ) {
     val onAction: (BridgeSettingsAction) -> Unit = viewModel::onAction
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
