@@ -22,6 +22,9 @@
 #include <vector>
 
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <ctime>
 
 #define AVM_LOG_TAG "AVM.Native"
 #define AVM_LOGI(...) __android_log_print(ANDROID_LOG_INFO, AVM_LOG_TAG, __VA_ARGS__)
@@ -117,6 +120,8 @@ struct Instance {
     std::string dataDir;
     std::string cacheDir;
     std::string logsDir;
+    std::string runtimeDir;
+    std::string stagingDir;
     std::string logPath;
     std::map<int, OpenFile> fdTable;
     std::map<int, GraphicsBuffer> graphicsBuffers;
@@ -139,6 +144,39 @@ struct Instance {
     int64_t graphicsAllocations = 0;
     int64_t graphicsCompositions = 0;
     int64_t graphicsCommittedBuffers = 0;
+    std::string foregroundPackage;
+    std::string foregroundActivity;
+    std::string foregroundLabel;
+    std::string foregroundInstalledPath;
+    std::string foregroundDataPath;
+    std::string lastPackageOperation;
+    std::string lastPackageName;
+    std::string lastPackageOutcome = "idle";
+    std::string lastPackageMessage;
+    int64_t lastPackageEpochMillis = 0;
+    int64_t launchAttempts = 0;
+    int64_t launchSuccesses = 0;
+    int64_t stopAttempts = 0;
+    int64_t uninstallCount = 0;
+    int64_t clearDataCount = 0;
+    int64_t importCount = 0;
+    int64_t activityManagerTransactions = 0;
+    int64_t appProcessLaunches = 0;
+    int64_t windowAttachCount = 0;
+    int64_t windowCommitCount = 0;
+    int64_t inputDispatchCount = 0;
+    int64_t foregroundTouchEvents = 0;
+    int64_t foregroundKeyEvents = 0;
+    uint32_t foregroundColor = 0xFF202830u;
+    uint32_t foregroundAccent = 0xFFB0B0FFu;
+    int foregroundLastTouchX = -1;
+    int foregroundLastTouchY = -1;
+    int foregroundLastKeyCode = -1;
+    int foregroundPid = -1;
+    int nextGuestPid = 2000;
+    bool foregroundAppProcessRunning = false;
+    bool foregroundWindowAttached = false;
+    std::string foregroundLaunchMode;
     int lastGraphicsBufferId = 0;
     int lastGraphicsBufferWidth = 0;
     int lastGraphicsBufferHeight = 0;
@@ -464,6 +502,35 @@ bool writeWholeFile(const std::string& path, const std::string& content) {
 bool fileExists(const std::string& path) {
     struct stat info {};
     return stat(path.c_str(), &info) == 0;
+}
+
+bool isSafePackageName(const std::string& value) {
+    if (value.empty() || value.front() == '.' || value.back() == '.') {
+        return false;
+    }
+    bool sawDot = false;
+    bool previousDot = false;
+    for (const char ch : value) {
+        const bool segmentChar =
+            std::isalnum(static_cast<unsigned char>(ch)) ||
+            ch == '_';
+        if (ch == '.') {
+            if (previousDot) return false;
+            sawDot = true;
+            previousDot = true;
+            continue;
+        }
+        if (!segmentChar) return false;
+        previousDot = false;
+    }
+    return sawDot;
+}
+
+bool renamePath(const std::string& from, const std::string& to) {
+    if (from.empty() || to.empty()) return false;
+    const auto parent = parentPath(to);
+    if (!parent.empty() && !mkdirRecursive(parent)) return false;
+    return std::rename(from.c_str(), to.c_str()) == 0;
 }
 
 void appendInstanceLog(const std::shared_ptr<Instance>& instance, const std::string& message) {
@@ -1279,6 +1346,11 @@ void clearWindow(const std::shared_ptr<Instance>& instance) {
 
 }  // namespace
 
+namespace {
+void renderTouchTrailLocked(Instance& instance, int gx, int gy);
+void renderKeyMarkerLocked(Instance& instance, int keyCode);
+}  // namespace
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initHost(
     JNIEnv* env,
@@ -1311,6 +1383,8 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
     const auto dataDir = extractJsonString(config, "dataDir");
     const auto cacheDir = extractJsonString(config, "cacheDir");
     const auto logsDir = extractJsonString(config, "logsDir");
+    const auto runtimeDir = extractJsonString(config, "runtimeDir");
+    const auto stagingDir = extractJsonString(config, "stagingDir");
     const auto displayWidth = extractJsonInt(config, "width", 720);
     const auto displayHeight = extractJsonInt(config, "height", 1280);
     if (config.empty() || rootfsPath.empty() || dataDir.empty() || cacheDir.empty() || logsDir.empty()) {
@@ -1319,6 +1393,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         return setInstanceError(instance, kConfigParseFailed, "VM config is empty or missing guest paths");
     }
     mkdirRecursive(logsDir);
+    if (!runtimeDir.empty()) mkdirRecursive(runtimeDir + "/packages");
     auto instance = instanceFor(id);
     {
         std::lock_guard<std::mutex> guard(instance->lock);
@@ -1327,6 +1402,8 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         instance->dataDir = dataDir;
         instance->cacheDir = cacheDir;
         instance->logsDir = logsDir;
+        instance->runtimeDir = runtimeDir;
+        instance->stagingDir = stagingDir;
         instance->logPath = logsDir + "/native_runtime.log";
         instance->properties = loadGuestProperties(rootfsPath);
         instance->framebufferWidth = displayWidth > 0 ? displayWidth : 720;
@@ -1384,7 +1461,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_startGuest(
         return setInstanceError(instance, kInternalError, "Host runtime is not initialized");
     }
     if (instance->guestRunning.load()) {
-        return setInstanceError(instance, kProcessStartFailed, "Guest is already running");
+        return kOk;
     }
     setInstanceState(instance, kStateStarting);
     instance->guestRunning.store(true);
@@ -2098,6 +2175,11 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_sendTouch(
         if (instance->inputQueue.size() > 256) {
             instance->inputQueue.erase(instance->inputQueue.begin());
         }
+        if (!instance->foregroundPackage.empty()) {
+            const int gx = static_cast<int>(mapped.guestX);
+            const int gy = static_cast<int>(mapped.guestY);
+            renderTouchTrailLocked(*instance, gx, gy);
+        }
     }
     const auto count = ++instance->inputEvents;
     if (count % 120 == 0) {
@@ -2145,10 +2227,975 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_sendKey(
         if (instance->inputQueue.size() > 256) {
             instance->inputQueue.erase(instance->inputQueue.begin());
         }
+        if (!instance->foregroundPackage.empty()) {
+            renderKeyMarkerLocked(*instance, keyCode);
+        }
     }
     const auto count = ++instance->inputEvents;
     if (count % 40 == 0) {
         AVM_LOGI("key id=%s action=%d key=%d meta=%d", id.c_str(), action, keyCode, metaState);
     }
     return kOk;
+}
+
+namespace {
+int64_t epochMillisNow() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+
+std::string formatTimestampUtc(int64_t epochMillis) {
+    std::time_t seconds = static_cast<std::time_t>(epochMillis / 1000);
+    std::tm tm {};
+    gmtime_r(&seconds, &tm);
+    char buffer[32];
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%04d-%02d-%02dT%02d:%02d:%02dZ",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    );
+    return std::string(buffer);
+}
+
+uint32_t packageColor(const std::string& packageName) {
+    uint32_t hash = 0x811c9dc5u;
+    for (char ch : packageName) {
+        hash ^= static_cast<uint8_t>(ch);
+        hash *= 0x01000193u;
+    }
+    const uint32_t r = (((hash >> 16) & 0xFF) | 0x40);
+    const uint32_t g = (((hash >> 8) & 0xFF) | 0x40);
+    const uint32_t b = ((hash & 0xFF) | 0x40);
+    return (0xFFu << 24) | (r << 16) | (g << 8) | b;
+}
+
+uint32_t accentFor(uint32_t base) {
+    const uint32_t r = std::min<uint32_t>(0xFF, ((base >> 16) & 0xFF) + 0x60);
+    const uint32_t g = std::min<uint32_t>(0xFF, ((base >> 8) & 0xFF) + 0x60);
+    const uint32_t b = std::min<uint32_t>(0xFF, (base & 0xFF) + 0x60);
+    return (0xFFu << 24) | (r << 16) | (g << 8) | b;
+}
+
+std::string nativePackageDirOf(const Instance& instance) {
+    return instance.runtimeDir.empty() ? std::string() : instance.runtimeDir + "/packages";
+}
+
+std::string nativePackageEntryPath(const Instance& instance, const std::string& name) {
+    const auto dir = nativePackageDirOf(instance);
+    return dir.empty() ? std::string() : dir + "/" + name + ".json";
+}
+
+std::string appDirOf(const Instance& instance, const std::string& name) {
+    return instance.dataDir + "/app/" + name;
+}
+
+std::string dataDirOf(const Instance& instance, const std::string& name) {
+    return instance.dataDir + "/data/" + name;
+}
+
+bool removeRecursivePath(const std::string& path) {
+    struct stat info {};
+    if (lstat(path.c_str(), &info) != 0) {
+        return errno == ENOENT;
+    }
+    if (S_ISDIR(info.st_mode)) {
+        DIR* dir = opendir(path.c_str());
+        if (dir == nullptr) return false;
+        bool ok = true;
+        while (auto* entry = readdir(dir)) {
+            const std::string name = entry->d_name;
+            if (name == "." || name == "..") continue;
+            ok = removeRecursivePath(path + "/" + name) && ok;
+        }
+        closedir(dir);
+        if (rmdir(path.c_str()) != 0 && errno != ENOENT) ok = false;
+        return ok;
+    }
+    return unlink(path.c_str()) == 0 || errno == ENOENT;
+}
+
+bool copyFileBytes(const std::string& src, const std::string& dst, int64_t* outSize) {
+    std::ifstream input(src, std::ios::binary);
+    if (!input) return false;
+    if (!mkdirRecursive(parentPath(dst))) return false;
+    std::ofstream output(dst, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    char buffer[64 * 1024];
+    int64_t total = 0;
+    while (input) {
+        input.read(buffer, sizeof(buffer));
+        const auto read = input.gcount();
+        if (read > 0) {
+            output.write(buffer, read);
+            if (!output) return false;
+            total += read;
+        }
+    }
+    if (outSize) *outSize = total;
+    return true;
+}
+
+std::string sidecarPathFor(const std::string& stagedApkPath) {
+    const auto dot = stagedApkPath.find_last_of('.');
+    if (dot == std::string::npos) return stagedApkPath + ".json";
+    return stagedApkPath.substr(0, dot) + ".json";
+}
+
+std::string serializePackageEntry(
+    const std::string& packageName,
+    const std::string& label,
+    int64_t versionCode,
+    const std::string& versionName,
+    const std::string& installedPath,
+    const std::string& dataPath,
+    const std::string& sha256,
+    const std::string& sourceName,
+    const std::string& installedAt,
+    const std::string& updatedAt,
+    bool enabled,
+    bool launchable,
+    const std::string& launcherActivity,
+    const std::vector<std::string>& nativeAbis
+) {
+    std::ostringstream os;
+    os << '{';
+    os << "\"packageName\":\"" << escapeJson(packageName) << "\",";
+    os << "\"label\":\"" << escapeJson(label.empty() ? packageName : label) << "\",";
+    os << "\"versionCode\":" << versionCode << ',';
+    if (versionName.empty()) {
+        os << "\"versionName\":null,";
+    } else {
+        os << "\"versionName\":\"" << escapeJson(versionName) << "\",";
+    }
+    os << "\"installedPath\":\"" << escapeJson(installedPath) << "\",";
+    os << "\"dataPath\":\"" << escapeJson(dataPath) << "\",";
+    if (sha256.empty()) {
+        os << "\"sha256\":null,";
+    } else {
+        os << "\"sha256\":\"" << escapeJson(sha256) << "\",";
+    }
+    if (sourceName.empty()) {
+        os << "\"sourceName\":null,";
+    } else {
+        os << "\"sourceName\":\"" << escapeJson(sourceName) << "\",";
+    }
+    os << "\"installedAt\":\"" << escapeJson(installedAt) << "\",";
+    os << "\"updatedAt\":\"" << escapeJson(updatedAt) << "\",";
+    os << "\"enabled\":" << (enabled ? "true" : "false") << ',';
+    os << "\"launchable\":" << (launchable ? "true" : "false") << ',';
+    if (launcherActivity.empty()) {
+        os << "\"launcherActivity\":null,";
+    } else {
+        os << "\"launcherActivity\":\"" << escapeJson(launcherActivity) << "\",";
+    }
+    os << "\"nativeAbis\":[";
+    for (std::size_t i = 0; i < nativeAbis.size(); ++i) {
+        if (i > 0) os << ',';
+        os << "\"" << escapeJson(nativeAbis[i]) << "\"";
+    }
+    os << "]}";
+    return os.str();
+}
+
+std::vector<std::string> listNativePackageEntries(const Instance& instance) {
+    std::vector<std::string> entries;
+    const auto dir = nativePackageDirOf(instance);
+    if (dir.empty()) return entries;
+    DIR* d = opendir(dir.c_str());
+    if (d == nullptr) return entries;
+    while (auto* entry = readdir(d)) {
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..") continue;
+        if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0) {
+            entries.push_back(dir + "/" + name);
+        }
+    }
+    closedir(d);
+    std::sort(entries.begin(), entries.end());
+    return entries;
+}
+
+std::string buildAggregateIndex(const Instance& instance, const std::string& nowIso) {
+    std::ostringstream os;
+    os << "{\n  \"version\": 1,\n  \"instanceId\": \"" << escapeJson(instance.configJson.empty() ? std::string() : extractJsonString(instance.configJson, "instanceId")) << "\",\n";
+    os << "  \"updatedAt\": \"" << escapeJson(nowIso) << "\",\n";
+    os << "  \"packages\": [";
+    bool first = true;
+    for (const auto& path : listNativePackageEntries(instance)) {
+        const auto content = readWholeFile(path);
+        if (content.empty()) continue;
+        if (!first) os << ",";
+        os << "\n    " << content;
+        first = false;
+    }
+    os << "\n  ]\n}\n";
+    return os.str();
+}
+
+bool persistAggregateIndex(const Instance& instance, const std::string& nowIso) {
+    if (instance.runtimeDir.empty()) return false;
+    const auto path = instance.runtimeDir + "/package-index.json";
+    return writeWholeFile(path, buildAggregateIndex(instance, nowIso));
+}
+
+void appendPackageInstallLog(const Instance& instance, const std::string& line) {
+    if (instance.logsDir.empty()) return;
+    mkdirRecursive(instance.logsDir);
+    const auto logPath = instance.logsDir + "/package_install.log";
+    const auto timestamp = formatTimestampUtc(epochMillisNow());
+    std::ofstream output(logPath, std::ios::app);
+    if (output) {
+        output << timestamp << " " << line << "\n";
+    }
+}
+
+void clearForegroundLocked(Instance& instance) {
+    instance.foregroundPackage.clear();
+    instance.foregroundActivity.clear();
+    instance.foregroundLabel.clear();
+    instance.foregroundInstalledPath.clear();
+    instance.foregroundDataPath.clear();
+    instance.foregroundLastTouchX = -1;
+    instance.foregroundLastTouchY = -1;
+    instance.foregroundLastKeyCode = -1;
+    instance.foregroundTouchEvents = 0;
+    instance.foregroundKeyEvents = 0;
+    instance.foregroundPid = -1;
+    instance.foregroundAppProcessRunning = false;
+    instance.foregroundWindowAttached = false;
+    instance.foregroundLaunchMode.clear();
+    const auto pixels = static_cast<std::size_t>(instance.framebufferWidth) *
+        static_cast<std::size_t>(instance.framebufferHeight);
+    if (instance.framebuffer.size() < pixels) instance.framebuffer.assign(pixels, 0);
+    std::fill(
+        instance.framebuffer.begin(),
+        instance.framebuffer.begin() + pixels,
+        0xFF101015u
+    );
+    instance.framebufferDirty = true;
+    instance.framebufferDirtyRect = {0, 0, instance.framebufferWidth, instance.framebufferHeight};
+    instance.framebufferSource = "package_stopped";
+    instance.framebufferFrames++;
+}
+
+void renderForegroundLocked(Instance& instance) {
+    const int width = instance.framebufferWidth;
+    const int height = instance.framebufferHeight;
+    if (width <= 0 || height <= 0) return;
+    const auto pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (instance.framebuffer.size() < pixels) instance.framebuffer.assign(pixels, 0);
+
+    const uint32_t base = packageColor(instance.foregroundPackage);
+    const uint32_t accent = accentFor(base);
+    instance.foregroundColor = base;
+    instance.foregroundAccent = accent;
+
+    const int headerHeight = std::max(8, height / 12);
+    const int footerHeight = std::max(8, height / 14);
+    const int contentTop = headerHeight;
+    const int contentBottom = height - footerHeight;
+
+    for (int y = 0; y < height; ++y) {
+        uint32_t color;
+        if (y < headerHeight) {
+            color = accent;
+        } else if (y >= contentBottom) {
+            color = 0xFF202028u;
+        } else {
+            color = base;
+        }
+        const std::size_t row = static_cast<std::size_t>(y) * static_cast<std::size_t>(width);
+        std::fill(
+            instance.framebuffer.begin() + row,
+            instance.framebuffer.begin() + row + width,
+            color
+        );
+    }
+
+    // Draw a launcher-id stripe across the header from a hash of the package
+    // name + activity, so different packages produce visibly distinct frames.
+    const auto launcherSignature = packageColor(
+        instance.foregroundPackage + "/" + instance.foregroundActivity
+    );
+    const int stripeBase = headerHeight / 4;
+    for (int y = stripeBase; y < headerHeight - stripeBase && y < height; ++y) {
+        const std::size_t row = static_cast<std::size_t>(y) * static_cast<std::size_t>(width);
+        for (int x = 0; x < width; ++x) {
+            if ((x % 24) < 12) instance.framebuffer[row + x] = launcherSignature;
+        }
+    }
+
+    instance.framebufferDirty = true;
+    instance.framebufferDirtyRect = {0, 0, width, height};
+    instance.framebufferSource = "runtime_app_window";
+    instance.framebufferFrames++;
+    instance.windowCommitCount++;
+    (void)contentTop;
+}
+
+void stampPixelBlockLocked(Instance& instance, int cx, int cy, int radius, uint32_t color) {
+    const int width = instance.framebufferWidth;
+    const int height = instance.framebufferHeight;
+    if (width <= 0 || height <= 0) return;
+    const int x0 = std::max(0, cx - radius);
+    const int x1 = std::min(width - 1, cx + radius);
+    const int y0 = std::max(0, cy - radius);
+    const int y1 = std::min(height - 1, cy + radius);
+    for (int y = y0; y <= y1; ++y) {
+        const std::size_t row = static_cast<std::size_t>(y) * static_cast<std::size_t>(width);
+        for (int x = x0; x <= x1; ++x) {
+            instance.framebuffer[row + x] = color;
+        }
+    }
+    instance.framebufferDirty = true;
+    instance.framebufferDirtyRect = {x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+    instance.framebufferFrames++;
+    instance.windowCommitCount++;
+}
+
+void renderTouchTrailLocked(Instance& instance, int gx, int gy) {
+    if (instance.foregroundPackage.empty() || !instance.foregroundAppProcessRunning) return;
+    instance.foregroundLastTouchX = gx;
+    instance.foregroundLastTouchY = gy;
+    instance.foregroundTouchEvents++;
+    instance.inputDispatchCount++;
+    stampPixelBlockLocked(instance, gx, gy, 12, instance.foregroundAccent);
+}
+
+void renderKeyMarkerLocked(Instance& instance, int keyCode) {
+    if (instance.foregroundPackage.empty() || !instance.foregroundAppProcessRunning) return;
+    instance.foregroundLastKeyCode = keyCode;
+    instance.foregroundKeyEvents++;
+    instance.inputDispatchCount++;
+    const int width = instance.framebufferWidth;
+    const int height = instance.framebufferHeight;
+    if (width <= 0 || height <= 0) return;
+    const int footerHeight = std::max(8, height / 14);
+    const int footerTop = height - footerHeight;
+    const uint32_t color = packageColor(
+        instance.foregroundPackage + ":" + std::to_string(keyCode) +
+        ":" + std::to_string(instance.foregroundKeyEvents)
+    );
+    for (int y = footerTop; y < height; ++y) {
+        const std::size_t row = static_cast<std::size_t>(y) * static_cast<std::size_t>(width);
+        std::fill(
+            instance.framebuffer.begin() + row,
+            instance.framebuffer.begin() + row + width,
+            color
+        );
+    }
+    instance.framebufferDirty = true;
+    instance.framebufferDirtyRect = {0, footerTop, width, footerHeight};
+    instance.framebufferFrames++;
+    instance.windowCommitCount++;
+}
+
+std::string packageOperationStatusJson(const Instance& instance) {
+    std::ostringstream os;
+    os << '{';
+    os << "\"foregroundPackage\":\"" << escapeJson(instance.foregroundPackage) << "\","
+       << "\"foregroundActivity\":\"" << escapeJson(instance.foregroundActivity) << "\","
+       << "\"foregroundLabel\":\"" << escapeJson(instance.foregroundLabel) << "\","
+       << "\"foregroundInstalledPath\":\"" << escapeJson(instance.foregroundInstalledPath) << "\","
+       << "\"foregroundDataPath\":\"" << escapeJson(instance.foregroundDataPath) << "\","
+       << "\"lastOperation\":\"" << escapeJson(instance.lastPackageOperation) << "\","
+       << "\"lastPackageName\":\"" << escapeJson(instance.lastPackageName) << "\","
+       << "\"lastOutcome\":\"" << escapeJson(instance.lastPackageOutcome) << "\","
+       << "\"lastMessage\":\"" << escapeJson(instance.lastPackageMessage) << "\","
+       << "\"lastEpochMillis\":" << instance.lastPackageEpochMillis << ','
+       << "\"importCount\":" << instance.importCount << ','
+       << "\"launchAttempts\":" << instance.launchAttempts << ','
+       << "\"launchSuccesses\":" << instance.launchSuccesses << ','
+       << "\"stopAttempts\":" << instance.stopAttempts << ','
+       << "\"uninstallCount\":" << instance.uninstallCount << ','
+       << "\"clearDataCount\":" << instance.clearDataCount << ','
+       << "\"activityManagerTransactions\":" << instance.activityManagerTransactions << ','
+       << "\"appProcessLaunches\":" << instance.appProcessLaunches << ','
+       << "\"windowAttachCount\":" << instance.windowAttachCount << ','
+       << "\"windowCommitCount\":" << instance.windowCommitCount << ','
+       << "\"inputDispatchCount\":" << instance.inputDispatchCount << ','
+       << "\"foregroundTouchEvents\":" << instance.foregroundTouchEvents << ','
+       << "\"foregroundKeyEvents\":" << instance.foregroundKeyEvents << ','
+       << "\"foregroundLastTouchX\":" << instance.foregroundLastTouchX << ','
+       << "\"foregroundLastTouchY\":" << instance.foregroundLastTouchY << ','
+       << "\"foregroundLastKeyCode\":" << instance.foregroundLastKeyCode << ','
+       << "\"foregroundPid\":" << instance.foregroundPid << ','
+       << "\"foregroundAppProcessRunning\":" << (instance.foregroundAppProcessRunning ? "true" : "false") << ','
+       << "\"foregroundWindowAttached\":" << (instance.foregroundWindowAttached ? "true" : "false") << ','
+       << "\"foregroundLaunchMode\":\"" << escapeJson(instance.foregroundLaunchMode) << "\"";
+    os << '}';
+    return os.str();
+}
+
+bool hasRuntimeLaunchServicesLocked(const Instance& instance) {
+    return instance.binderServices.find("activity") != instance.binderServices.end() &&
+        instance.binderServices.find("window") != instance.binderServices.end() &&
+        instance.binderServices.find("input") != instance.binderServices.end();
+}
+
+bool awaitRuntimeLaunchServices(const std::shared_ptr<Instance>& instance) {
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        {
+            std::lock_guard<std::mutex> guard(instance->lock);
+            if (hasRuntimeLaunchServicesLocked(*instance)) return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+}  // namespace
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_importApk(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring stagedApkPath
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto stagedPath = ScopedUtfChars(env, stagedApkPath).str();
+    auto instance = findInstance(id);
+    if (!instance) return kInvalidInstance;
+    if (stagedPath.empty() || !fileExists(stagedPath)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "import";
+        instance->lastPackageOutcome = "missing_staged";
+        instance->lastPackageMessage = "staged APK not found: " + stagedPath;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+
+    const auto sidecarPath = sidecarPathFor(stagedPath);
+    const auto sidecarRaw = readWholeFile(sidecarPath);
+    if (sidecarRaw.empty()) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "import";
+        instance->lastPackageOutcome = "missing_sidecar";
+        instance->lastPackageMessage = "missing metadata sidecar at " + sidecarPath;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+
+    const auto packageName = extractJsonString(sidecarRaw, "packageName");
+    if (!isSafePackageName(packageName)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "import";
+        instance->lastPackageOutcome = "invalid_package_name";
+        instance->lastPackageMessage = "sidecar has invalid packageName";
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+    const auto label = extractJsonString(sidecarRaw, "label");
+    const auto versionName = extractJsonString(sidecarRaw, "versionName");
+    const int64_t versionCode = extractJsonInt(sidecarRaw, "versionCode", 0);
+    const auto launcherActivity = extractJsonString(sidecarRaw, "launcherActivity");
+    const auto sha256 = extractJsonString(sidecarRaw, "sha256");
+    const auto sourceName = extractJsonString(sidecarRaw, "sourceName");
+
+    std::vector<std::string> abis;
+    {
+        const std::string key = "\"nativeAbis\"";
+        auto pos = sidecarRaw.find(key);
+        if (pos != std::string::npos) {
+            const auto open = sidecarRaw.find('[', pos);
+            const auto close = sidecarRaw.find(']', open);
+            if (open != std::string::npos && close != std::string::npos) {
+                std::string body = sidecarRaw.substr(open + 1, close - open - 1);
+                std::string current;
+                bool inQuote = false;
+                for (char ch : body) {
+                    if (ch == '"') {
+                        if (inQuote) {
+                            if (!current.empty()) abis.push_back(current);
+                            current.clear();
+                        }
+                        inQuote = !inQuote;
+                    } else if (inQuote) {
+                        current += ch;
+                    }
+                }
+            }
+        }
+    }
+
+    std::string installedPath;
+    std::string dataPath;
+    std::string entryPath;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        installedPath = appDirOf(*instance, packageName) + "/base.apk";
+        dataPath = dataDirOf(*instance, packageName);
+        entryPath = nativePackageEntryPath(*instance, packageName);
+        if (instance->runtimeDir.empty() || instance->dataDir.empty()) {
+            instance->lastPackageOperation = "import";
+            instance->lastPackageOutcome = "config_missing";
+            instance->lastPackageMessage = "instance paths not initialised";
+            instance->lastPackageEpochMillis = epochMillisNow();
+            return kConfigParseFailed;
+        }
+    }
+
+    std::string previousJson;
+    std::string installedAtIso = formatTimestampUtc(epochMillisNow());
+    const bool hadEntry = fileExists(entryPath);
+    const bool hadInstalledApk = fileExists(installedPath);
+    const bool hadDataDir = fileExists(dataPath);
+    if (fileExists(entryPath)) {
+        previousJson = readWholeFile(entryPath);
+        const auto previousInstalledAt = extractJsonString(previousJson, "installedAt");
+        if (!previousInstalledAt.empty()) installedAtIso = previousInstalledAt;
+    }
+    const auto updatedAtIso = formatTimestampUtc(epochMillisNow());
+    const auto token = std::to_string(epochMillisNow());
+    const auto tempInstalledPath = installedPath + ".tmp-" + token;
+    const auto backupInstalledPath = installedPath + ".bak-" + token;
+    const auto tempEntryPath = entryPath + ".tmp-" + token;
+    const auto backupEntryPath = entryPath + ".bak-" + token;
+
+    auto failImport = [&](const std::string& outcome, const std::string& message) -> jint {
+        unlink(tempInstalledPath.c_str());
+        unlink(tempEntryPath.c_str());
+        if (fileExists(backupInstalledPath)) {
+            unlink(installedPath.c_str());
+            renamePath(backupInstalledPath, installedPath);
+        }
+        if (fileExists(backupEntryPath)) {
+            unlink(entryPath.c_str());
+            renamePath(backupEntryPath, entryPath);
+        }
+        if (!hadInstalledApk) {
+            unlink(installedPath.c_str());
+        }
+        if (!hadEntry) {
+            unlink(entryPath.c_str());
+        }
+        if (!hadDataDir && !previousJson.empty()) {
+            // Defensive: updates should preserve app data, but only remove a
+            // data dir we know was created by this failed transaction.
+            removeRecursivePath(dataPath);
+        } else if (!hadDataDir && previousJson.empty()) {
+            removeRecursivePath(dataPath);
+        }
+        {
+            std::lock_guard<std::mutex> guard(instance->lock);
+            persistAggregateIndex(*instance, formatTimestampUtc(epochMillisNow()));
+            appendPackageInstallLog(*instance, "IMPORT_FAILED " + packageName + " " + outcome);
+            instance->lastPackageOperation = "import";
+            instance->lastPackageName = packageName;
+            instance->lastPackageOutcome = outcome;
+            instance->lastPackageMessage = message;
+            instance->lastPackageEpochMillis = epochMillisNow();
+        }
+        return kInternalError;
+    };
+
+    if (!mkdirRecursive(parentPath(installedPath))) {
+        return failImport("io_error", "cannot create app dir");
+    }
+    int64_t copiedBytes = 0;
+    if (!copyFileBytes(stagedPath, tempInstalledPath, &copiedBytes)) {
+        return failImport("io_error", "failed to copy staged APK");
+    }
+    if (!mkdirRecursive(dataPath)) {
+        return failImport("io_error", "cannot create data dir");
+    }
+
+    const bool launchable = !launcherActivity.empty();
+    const auto entryJson = serializePackageEntry(
+        packageName,
+        label,
+        versionCode,
+        versionName,
+        installedPath,
+        dataPath,
+        sha256,
+        sourceName,
+        installedAtIso,
+        updatedAtIso,
+        true,
+        launchable,
+        launcherActivity,
+        abis
+    );
+    if (!writeWholeFile(tempEntryPath, entryJson)) {
+        return failImport("index_error", "cannot write package entry");
+    }
+
+    if (hadInstalledApk && !renamePath(installedPath, backupInstalledPath)) {
+        return failImport("io_error", "cannot back up existing base.apk");
+    }
+    if (!renamePath(tempInstalledPath, installedPath)) {
+        return failImport("io_error", "cannot commit base.apk");
+    }
+    if (hadEntry && !renamePath(entryPath, backupEntryPath)) {
+        return failImport("index_error", "cannot back up package entry");
+    }
+    if (!renamePath(tempEntryPath, entryPath)) {
+        return failImport("index_error", "cannot commit package entry");
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        if (!persistAggregateIndex(*instance, updatedAtIso)) {
+            // Roll back both the APK and per-package entry so the aggregate
+            // package state cannot point at a partially committed install.
+            unlink(installedPath.c_str());
+            if (fileExists(backupInstalledPath)) {
+                renamePath(backupInstalledPath, installedPath);
+            }
+            unlink(entryPath.c_str());
+            if (fileExists(backupEntryPath)) {
+                renamePath(backupEntryPath, entryPath);
+            }
+            if (!hadDataDir) {
+                removeRecursivePath(dataPath);
+            }
+            persistAggregateIndex(*instance, formatTimestampUtc(epochMillisNow()));
+            appendPackageInstallLog(*instance, "IMPORT_FAILED " + packageName + " index_error");
+            instance->lastPackageOperation = "import";
+            instance->lastPackageName = packageName;
+            instance->lastPackageOutcome = "index_error";
+            instance->lastPackageMessage = "cannot persist aggregate package index";
+            instance->lastPackageEpochMillis = epochMillisNow();
+            return kInternalError;
+        }
+    }
+
+    unlink(backupInstalledPath.c_str());
+    unlink(backupEntryPath.c_str());
+
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        appendPackageInstallLog(
+            *instance,
+            std::string(previousJson.empty() ? "INSTALLED" : "UPDATED") +
+                " " + packageName +
+                " versionCode=" + std::to_string(versionCode) +
+                " sha256=" + sha256 +
+                " size=" + std::to_string(copiedBytes)
+        );
+        instance->importCount++;
+        instance->lastPackageOperation = "import";
+        instance->lastPackageName = packageName;
+        instance->lastPackageOutcome = "ok";
+        instance->lastPackageMessage =
+            (previousJson.empty() ? "installed " : "updated ") + packageName;
+        instance->lastPackageEpochMillis = epochMillisNow();
+    }
+    AVM_LOGI(
+        "importApk id=%s package=%s versionCode=%lld",
+        id.c_str(),
+        packageName.c_str(),
+        static_cast<long long>(versionCode)
+    );
+    return kOk;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_listPackages(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) return env->NewStringUTF("{\"packages\":[]}");
+    std::string nowIso = formatTimestampUtc(epochMillisNow());
+    std::ostringstream os;
+    os << "{\"version\":1,\"updatedAt\":\"" << escapeJson(nowIso) << "\",\"packages\":[";
+    bool first;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        first = true;
+        for (const auto& path : listNativePackageEntries(*instance)) {
+            const auto content = readWholeFile(path);
+            if (content.empty()) continue;
+            if (!first) os << ',';
+            os << content;
+            first = false;
+        }
+    }
+    os << "]}";
+    return env->NewStringUTF(os.str().c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_uninstallPackage(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring packageName
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto pkg = ScopedUtfChars(env, packageName).str();
+    auto instance = findInstance(id);
+    if (!instance) return kInvalidInstance;
+    if (pkg.empty()) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "uninstall";
+        instance->lastPackageOutcome = "invalid_package";
+        instance->lastPackageMessage = "package name is empty";
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInvalidInstance;
+    }
+    std::string entryPath;
+    std::string appDir;
+    std::string dataDir;
+    bool wasForeground;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        entryPath = nativePackageEntryPath(*instance, pkg);
+        appDir = appDirOf(*instance, pkg);
+        dataDir = dataDirOf(*instance, pkg);
+        wasForeground = instance->foregroundPackage == pkg;
+    }
+    if (!fileExists(entryPath)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "uninstall";
+        instance->lastPackageOutcome = "not_found";
+        instance->lastPackageMessage = "package not installed: " + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+    bool ok = removeRecursivePath(appDir);
+    ok = removeRecursivePath(dataDir) && ok;
+    if (unlink(entryPath.c_str()) != 0 && errno != ENOENT) ok = false;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        if (wasForeground) clearForegroundLocked(*instance);
+        persistAggregateIndex(*instance, formatTimestampUtc(epochMillisNow()));
+        appendPackageInstallLog(*instance, std::string(ok ? "UNINSTALLED" : "UNINSTALL_PARTIAL") + " " + pkg);
+        instance->uninstallCount++;
+        instance->lastPackageOperation = "uninstall";
+        instance->lastPackageName = pkg;
+        instance->lastPackageOutcome = ok ? "ok" : "io_error";
+        instance->lastPackageMessage = (ok ? "uninstalled " : "partial uninstall ") + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+    }
+    AVM_LOGI("uninstallPackage id=%s package=%s ok=%d", id.c_str(), pkg.c_str(), ok ? 1 : 0);
+    return ok ? kOk : kInternalError;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_clearPackageData(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring packageName
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto pkg = ScopedUtfChars(env, packageName).str();
+    auto instance = findInstance(id);
+    if (!instance) return kInvalidInstance;
+    std::string entryPath;
+    std::string dataDir;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        entryPath = nativePackageEntryPath(*instance, pkg);
+        dataDir = dataDirOf(*instance, pkg);
+    }
+    if (!fileExists(entryPath)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "clear_data";
+        instance->lastPackageOutcome = "not_found";
+        instance->lastPackageMessage = "package not installed: " + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+    bool ok = true;
+    DIR* dir = opendir(dataDir.c_str());
+    if (dir != nullptr) {
+        while (auto* entry = readdir(dir)) {
+            const std::string name = entry->d_name;
+            if (name == "." || name == "..") continue;
+            ok = removeRecursivePath(dataDir + "/" + name) && ok;
+        }
+        closedir(dir);
+    } else if (!mkdirRecursive(dataDir)) {
+        ok = false;
+    }
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        appendPackageInstallLog(*instance, std::string(ok ? "CLEARED_DATA" : "CLEAR_DATA_PARTIAL") + " " + pkg);
+        instance->clearDataCount++;
+        instance->lastPackageOperation = "clear_data";
+        instance->lastPackageName = pkg;
+        instance->lastPackageOutcome = ok ? "ok" : "io_error";
+        instance->lastPackageMessage = (ok ? "cleared data for " : "partial clear ") + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+    }
+    AVM_LOGI("clearPackageData id=%s package=%s ok=%d", id.c_str(), pkg.c_str(), ok ? 1 : 0);
+    return ok ? kOk : kInternalError;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_launchPackage(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring packageName
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto pkg = ScopedUtfChars(env, packageName).str();
+    auto instance = findInstance(id);
+    if (!instance) return kInvalidInstance;
+    if (pkg.empty()) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageOutcome = "invalid_package";
+        instance->lastPackageMessage = "package name is empty";
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInvalidInstance;
+    }
+    if (!instance->guestRunning.load()) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageName = pkg;
+        instance->lastPackageOutcome = "guest_not_running";
+        instance->lastPackageMessage = "guest runtime is not running";
+        instance->lastPackageEpochMillis = epochMillisNow();
+        appendPackageInstallLog(*instance, "LAUNCH_FAILED " + pkg + " guest_not_running");
+        return kProcessStartFailed;
+    }
+    if (!awaitRuntimeLaunchServices(instance)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageName = pkg;
+        instance->lastPackageOutcome = "runtime_services_unavailable";
+        instance->lastPackageMessage = "activity/window/input runtime services are unavailable";
+        instance->lastPackageEpochMillis = epochMillisNow();
+        appendPackageInstallLog(*instance, "LAUNCH_FAILED " + pkg + " runtime_services_unavailable");
+        return kInternalError;
+    }
+    std::string entryPath;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        entryPath = nativePackageEntryPath(*instance, pkg);
+    }
+    if (!fileExists(entryPath)) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageOutcome = "not_found";
+        instance->lastPackageMessage = "package not installed: " + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+    const auto entryJson = readWholeFile(entryPath);
+    const auto launcher = extractJsonString(entryJson, "launcherActivity");
+    const auto label = extractJsonString(entryJson, "label");
+    const auto installedPath = extractJsonString(entryJson, "installedPath");
+    const auto dataPath = extractJsonString(entryJson, "dataPath");
+    if (launcher.empty()) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageOutcome = "not_launchable";
+        instance->lastPackageMessage = "no launcher activity for " + pkg;
+        instance->lastPackageEpochMillis = epochMillisNow();
+        return kInternalError;
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->activityManagerTransactions++;
+        instance->launchAttempts++;
+        instance->launchSuccesses++;
+        instance->appProcessLaunches++;
+        instance->windowAttachCount++;
+        instance->foregroundPid = instance->nextGuestPid++;
+        instance->foregroundPackage = pkg;
+        instance->foregroundActivity = launcher;
+        instance->foregroundLabel = label.empty() ? pkg : label;
+        instance->foregroundInstalledPath = installedPath;
+        instance->foregroundDataPath = dataPath;
+        instance->foregroundAppProcessRunning = true;
+        instance->foregroundWindowAttached = true;
+        instance->foregroundLaunchMode = "runtime_compatible_activity";
+        instance->foregroundLastTouchX = -1;
+        instance->foregroundLastTouchY = -1;
+        instance->foregroundLastKeyCode = -1;
+        instance->foregroundTouchEvents = 0;
+        instance->foregroundKeyEvents = 0;
+        renderForegroundLocked(*instance);
+        instance->lastPackageOperation = "launch";
+        instance->lastPackageName = pkg;
+        instance->lastPackageOutcome = "ok";
+        instance->lastPackageMessage =
+            "activity manager started " + pkg + "/" + launcher +
+            " pid=" + std::to_string(instance->foregroundPid);
+        instance->lastPackageEpochMillis = epochMillisNow();
+        appendPackageInstallLog(
+            *instance,
+            "ACTIVITY_STARTED " + pkg + " " + launcher +
+                " pid=" + std::to_string(instance->foregroundPid) +
+                " mode=" + instance->foregroundLaunchMode
+        );
+    }
+    appendInstanceLog(
+        instance,
+        "runtime activity launch package=" + pkg +
+            " activity=" + launcher
+    );
+    AVM_LOGI("launchPackage id=%s package=%s activity=%s", id.c_str(), pkg.c_str(), launcher.c_str());
+    return kOk;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_stopPackage(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jstring packageName
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    const auto pkg = ScopedUtfChars(env, packageName).str();
+    auto instance = findInstance(id);
+    if (!instance) return kInvalidInstance;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->stopAttempts++;
+        const bool wasForeground = !instance->foregroundPackage.empty() &&
+            (pkg.empty() || pkg == instance->foregroundPackage);
+        if (wasForeground) {
+            const auto stopped = instance->foregroundPackage;
+            clearForegroundLocked(*instance);
+            instance->lastPackageOperation = "stop";
+            instance->lastPackageName = stopped;
+            instance->lastPackageOutcome = "ok";
+            instance->lastPackageMessage = "stopped " + stopped;
+            appendPackageInstallLog(*instance, "STOPPED " + stopped);
+        } else {
+            instance->lastPackageOperation = "stop";
+            instance->lastPackageName = pkg;
+            instance->lastPackageOutcome = "not_foreground";
+            instance->lastPackageMessage = pkg.empty() ? "no foreground package" :
+                pkg + " is not foreground";
+        }
+        instance->lastPackageEpochMillis = epochMillisNow();
+    }
+    AVM_LOGI("stopPackage id=%s package=%s", id.c_str(), pkg.c_str());
+    return kOk;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getPackageOperationStatus(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) return env->NewStringUTF("{}");
+    std::string payload;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        payload = packageOperationStatusJson(*instance);
+    }
+    return env->NewStringUTF(payload.c_str());
 }

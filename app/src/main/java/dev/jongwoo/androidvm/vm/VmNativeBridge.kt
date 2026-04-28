@@ -115,4 +115,25 @@ object VmNativeBridge {
 
     @JvmStatic
     external fun sendKey(instanceId: String, action: Int, keyCode: Int, metaState: Int): Int
+
+    @JvmStatic
+    external fun importApk(instanceId: String, stagedApkPath: String): Int
+
+    @JvmStatic
+    external fun listPackages(instanceId: String): String
+
+    @JvmStatic
+    external fun launchPackage(instanceId: String, packageName: String): Int
+
+    @JvmStatic
+    external fun stopPackage(instanceId: String, packageName: String): Int
+
+    @JvmStatic
+    external fun uninstallPackage(instanceId: String, packageName: String): Int
+
+    @JvmStatic
+    external fun clearPackageData(instanceId: String, packageName: String): Int
+
+    @JvmStatic
+    external fun getPackageOperationStatus(instanceId: String): String
 }

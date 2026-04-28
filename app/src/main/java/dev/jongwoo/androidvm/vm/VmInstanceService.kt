@@ -26,6 +26,50 @@ class VmInstanceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> stopRuntime()
+            ACTION_IMPORT_APK -> {
+                startRuntime()
+                if (state == VmState.RUNNING) {
+                    val staged = intent?.getStringExtra(EXTRA_STAGED_PATH).orEmpty()
+                    if (staged.isNotEmpty()) {
+                        VmNativeBridge.importApk(VmConfig.DEFAULT_INSTANCE_ID, staged)
+                    }
+                }
+            }
+            ACTION_LAUNCH_PACKAGE -> {
+                startRuntime()
+                if (state == VmState.RUNNING) {
+                    val pkg = intent?.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty()
+                    if (pkg.isNotEmpty()) {
+                        VmNativeBridge.launchPackage(VmConfig.DEFAULT_INSTANCE_ID, pkg)
+                    }
+                }
+            }
+            ACTION_STOP_PACKAGE -> {
+                if (state == VmState.RUNNING) {
+                    VmNativeBridge.stopPackage(
+                        VmConfig.DEFAULT_INSTANCE_ID,
+                        intent?.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty(),
+                    )
+                }
+            }
+            ACTION_UNINSTALL_PACKAGE -> {
+                startRuntime()
+                if (state == VmState.RUNNING) {
+                    VmNativeBridge.uninstallPackage(
+                        VmConfig.DEFAULT_INSTANCE_ID,
+                        intent?.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty(),
+                    )
+                }
+            }
+            ACTION_CLEAR_DATA -> {
+                startRuntime()
+                if (state == VmState.RUNNING) {
+                    VmNativeBridge.clearPackageData(
+                        VmConfig.DEFAULT_INSTANCE_ID,
+                        intent?.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty(),
+                    )
+                }
+            }
             else -> startRuntime()
         }
         return START_STICKY
@@ -120,6 +164,13 @@ class VmInstanceService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_START = "dev.jongwoo.androidvm.action.START_VM"
         private const val ACTION_STOP = "dev.jongwoo.androidvm.action.STOP_VM"
+        private const val ACTION_IMPORT_APK = "dev.jongwoo.androidvm.action.IMPORT_APK"
+        private const val ACTION_LAUNCH_PACKAGE = "dev.jongwoo.androidvm.action.LAUNCH_PACKAGE"
+        private const val ACTION_STOP_PACKAGE = "dev.jongwoo.androidvm.action.STOP_PACKAGE"
+        private const val ACTION_UNINSTALL_PACKAGE = "dev.jongwoo.androidvm.action.UNINSTALL_PACKAGE"
+        private const val ACTION_CLEAR_DATA = "dev.jongwoo.androidvm.action.CLEAR_PACKAGE_DATA"
+        private const val EXTRA_PACKAGE_NAME = "extra.packageName"
+        private const val EXTRA_STAGED_PATH = "extra.stagedPath"
 
         fun start(context: Context) {
             val intent = Intent(context, VmInstanceService::class.java).setAction(ACTION_START)
@@ -128,6 +179,41 @@ class VmInstanceService : Service() {
 
         fun stop(context: Context) {
             context.startService(Intent(context, VmInstanceService::class.java).setAction(ACTION_STOP))
+        }
+
+        fun importApk(context: Context, stagedPath: String) {
+            val intent = Intent(context, VmInstanceService::class.java)
+                .setAction(ACTION_IMPORT_APK)
+                .putExtra(EXTRA_STAGED_PATH, stagedPath)
+            context.startForegroundService(intent)
+        }
+
+        fun launchPackage(context: Context, packageName: String) {
+            val intent = Intent(context, VmInstanceService::class.java)
+                .setAction(ACTION_LAUNCH_PACKAGE)
+                .putExtra(EXTRA_PACKAGE_NAME, packageName)
+            context.startForegroundService(intent)
+        }
+
+        fun stopPackage(context: Context, packageName: String) {
+            val intent = Intent(context, VmInstanceService::class.java)
+                .setAction(ACTION_STOP_PACKAGE)
+                .putExtra(EXTRA_PACKAGE_NAME, packageName)
+            context.startService(intent)
+        }
+
+        fun uninstallPackage(context: Context, packageName: String) {
+            val intent = Intent(context, VmInstanceService::class.java)
+                .setAction(ACTION_UNINSTALL_PACKAGE)
+                .putExtra(EXTRA_PACKAGE_NAME, packageName)
+            context.startForegroundService(intent)
+        }
+
+        fun clearPackageData(context: Context, packageName: String) {
+            val intent = Intent(context, VmInstanceService::class.java)
+                .setAction(ACTION_CLEAR_DATA)
+                .putExtra(EXTRA_PACKAGE_NAME, packageName)
+            context.startForegroundService(intent)
         }
     }
 }
