@@ -1173,9 +1173,9 @@ bool runSyscallSmoke(const std::shared_ptr<Instance>& instance) {
         readWholeFile(writeResolution.hostPath) == "syscall-smoke-ok";
 }
 
-void dummyGuestEntrypoint(const std::shared_ptr<Instance>& instance, const std::string& instanceId) {
+void phaseBGuestRuntimeEntrypoint(const std::shared_ptr<Instance>& instance, const std::string& instanceId) {
     instance->guestProcessRunning.store(true);
-    appendInstanceLog(instance, "guest_process entrypoint reached id=" + instanceId);
+    appendInstanceLog(instance, "guest runtime entrypoint reached id=" + instanceId);
 
     std::string model;
     {
@@ -1201,11 +1201,11 @@ void dummyGuestEntrypoint(const std::shared_ptr<Instance>& instance, const std::
         std::lock_guard<std::mutex> guard(instance->lock);
         instance->bootstrapStatus =
             "virtual_init=ok;property_service=ok;servicemanager=ok;"
-            "zygote=attempted;system_server=blocked:elf_loader_missing";
+            "zygote=attempted;system_server=blocked:phase_c_pending";
     }
     appendInstanceLog(instance, "virtual init -> property service -> servicemanager -> zygote");
     appendInstanceLog(instance, "zygote process start attempted");
-    appendInstanceLog(instance, "system_server blocked: ELF loader is not implemented yet");
+    appendInstanceLog(instance, "system_server blocked: Phase C process tree pending");
     instance->guestProcessRunning.store(false);
 }
 
@@ -1213,7 +1213,7 @@ void startGuestProcessThread(const std::shared_ptr<Instance>& instance, const st
     if (instance->guestThread.joinable()) {
         instance->guestThread.join();
     }
-    instance->guestThread = std::thread(dummyGuestEntrypoint, instance, instanceId);
+    instance->guestThread = std::thread(phaseBGuestRuntimeEntrypoint, instance, instanceId);
 }
 
 void stopGuestProcessThread(const std::shared_ptr<Instance>& instance) {

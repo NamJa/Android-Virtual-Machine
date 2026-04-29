@@ -6,7 +6,7 @@
 ## 1. 진입 조건
 
 - Phase A 종료 게이트 (`STAGE_PHASE_A_RESULT passed=true ...`) 통과.
-- `app/src/main/cpp/vm_native_bridge.cpp` 가 안정적으로 빌드되고 Stage 4 진단 결과가 회귀 없이 통과.
+- `app/src/main/cpp/jni/vm_native_bridge.cpp` 가 안정적으로 빌드되고 Stage 4 진단 결과가 회귀 없이 통과.
 - canonical Gradle gate 가 CI 에서 자동 실행됨.
 
 ## 2. 핵심 산출물
@@ -18,23 +18,23 @@ $ adb shell am broadcast -a dev.jongwoo.androidvm.debug.RUN_PHASE_B_DIAGNOSTICS 
     -n dev.jongwoo.androidvm/.debug.StagePhaseBDiagnosticsReceiver
 adb logcat -s AVM.PhaseBDiag
 ...
-STAGE_PHASE_B_RESULT passed=true elf=true linker=true syscall=true lifecycle=true binary=true
+STAGE_PHASE_B_RESULT passed=true modular=true elf=true linker=true syscall=true lifecycle=true binary=true stage_phase_a=true
 ```
 
 binary 후보: minimal rootfs 안의 **실제 arm64 PIE ELF** `system/bin/avm-hello` 또는 `system/bin/toybox`.
 
-주의: 현재 `tools/create_debug_guest_fixture.sh` 가 생성하는 `system/bin/sh` 는 shell script fixture 이므로 Phase B 의 ELF 실행 검증 대상으로 사용할 수 없다. B.6 착수 전에 debug fixture 를 실제 arm64 PIE binary + 필요한 guest `linker64` / `libc.so` / `libdl.so` 포함 형태로 교체해야 한다.
+현재 `tools/create_debug_guest_fixture.sh` 는 Phase B 검증용 실제 arm64 PIE ELF `system/bin/avm-hello` 와 필요한 guest `linker64` / `libc.so` / `libdl.so` 를 포함한다. 기존 shell script fixture (`system/bin/sh`) 는 Stage 4 호환용으로만 남긴다.
 
 ## 3. 진척 현황 요약
 
 | 영역 | 상태 | 참고 |
 |---|---|---|
-| Native single-file 구조 | ⚠️ 모듈화 필요 | `vm_native_bridge.cpp` 3301 줄 |
-| ELF loader | ❌ | `system_server blocked: ELF loader is not implemented yet` (line 1208) |
-| Bionic linker bridge | ❌ | 미구현 |
-| Syscall dispatch table | ❌ | 미구현 (path-rewriting VFS 만 존재) |
-| Process state machine | ❌ | `dummyGuestEntrypoint` thread 만 |
-| Single binary execution PoC | ❌ | `STAGE4_RESULT` 의 `guest_binary_run` 는 stub |
+| Native single-file 구조 | ✅ Phase B 모듈 경계 도입 | `cpp/{core,loader,syscall,vfs,binder,property,device,jni}/` + explicit CMake source list |
+| ELF loader | ✅ | ELF64 PIE parse/map + PT_INTERP/aux vector 검증 |
+| Bionic linker bridge | ✅ Phase B PoC | linker handoff contract + `libc_init=ok stdout=ok` diagnostic |
+| Syscall dispatch table | ✅ | 25개 MVP syscall registration + native round-trip smoke |
+| Process state machine | ✅ | `CREATED → LOADING → RUNNING → ZOMBIE → REAPED` |
+| Single binary execution PoC | ✅ | `avm-hello` PIE entry 실행, stdout `hello` 캡처 |
 
 ## 4. 잔여 Step 일람
 
@@ -500,7 +500,7 @@ ARM64 syscall 번호 (`<asm/unistd.h>` 의 generic table):
 
 ### 5.5.1 Background
 
-현재 `dummyGuestEntrypoint` 는 단일 thread 안에서 로그만 찍고 끝난다. 진짜 process model 이 도입되어야 zygote (Phase C.4) 가 fork-like semantics 로 system_server 를 띄울 수 있다.
+기존 `dummyGuestEntrypoint` 로그-only 경로는 Phase B 에서 제거되었다. 이후 진짜 process model 이 도입되어야 zygote (Phase C.4) 가 fork-like semantics 로 system_server 를 띄울 수 있다.
 
 Phase B 시점에서는 fork 없이 **단일 process / thread 시뮬레이션** 만 갖춘다.
 
@@ -515,7 +515,7 @@ Phase B 시점에서는 fork 없이 **단일 process / thread 시뮬레이션** 
 |---|---|
 | `app/src/main/cpp/loader/guest_process.{h,cpp}` (NEW) | state machine + thread |
 | `app/src/main/cpp/core/instance.h` | `enum class GuestProcessState { CREATED, LOADING, RUNNING, ZOMBIE, REAPED }` |
-| `app/src/main/cpp/core/event_loop.cpp` | `dummyGuestEntrypoint` 제거 |
+| `app/src/main/cpp/jni/vm_native_bridge.cpp` | legacy dummy entrypoint 제거, Phase B runtime entrypoint 로 교체 |
 
 ### 5.5.4 세부 작업
 
@@ -643,12 +643,12 @@ STAGE_PHASE_B_RESULT passed=true modular=true elf=true linker=true syscall=true 
 
 다음을 **모두** 만족해야 Phase C 의 어떤 step 도 시작하지 않는다.
 
-- [ ] `STAGE_PHASE_B_RESULT passed=true modular=true elf=true linker=true syscall=true lifecycle=true binary=true stage_phase_a=true` 가 emulator log 에 기록.
-- [ ] 단일 PIE arm64 binary 가 host 프로세스 안에서 실행되어 stdout 한 줄을 출력.
-- [ ] `StagePhaseBFinalGateTest` 통과.
-- [ ] Stage 4 receiver 의 "guest binary run" 이 stub 이 아닌 실제 실행으로 통과.
-- [ ] Stage 5/6/7 회귀 라인 미회귀.
-- [ ] CI gate 통과.
+- [x] `STAGE_PHASE_B_RESULT passed=true modular=true elf=true linker=true syscall=true lifecycle=true binary=true stage_phase_a=true` 가 emulator log 에 기록.
+- [x] 단일 PIE arm64 binary 가 host 프로세스 안에서 실행되어 stdout 한 줄을 출력.
+- [x] `StagePhaseBFinalGateTest` 통과.
+- [x] Stage 4 receiver 의 "guest binary run" 이 stub 이 아닌 실제 실행으로 통과.
+- [x] Stage 5/6/7 회귀 라인 미회귀.
+- [x] canonical Gradle gate 통과 (`testDebugUnitTest`, `assembleDebug`, `lintDebug`, `assembleRelease`).
 
 ## 7. 비목표
 
