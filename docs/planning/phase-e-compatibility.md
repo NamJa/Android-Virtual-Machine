@@ -15,10 +15,11 @@
 - snapshot / rollback 가능.
 - Android 10 / 12 guest image 도 부팅.
 - GPU 가속 옵션 (GLES → Virgl → Venus) 점진 도입.
-- (선택) 32-bit / x86 guest translation.
+- (선택) 32-bit / x86 guest translation. 선택 기능이므로 core Phase E 종료 게이트와 분리한다.
+- (선택) GMS compatibility profile 은 별도 license / 사용자 제공 패키지 검토가 필요한 비배포 확장으로만 다룬다.
 
 ```text
-STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=true stage_phase_d=true
+STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=skipped security_update=true stage_phase_d=true
 ```
 
 ## 3. 진척 현황 요약
@@ -45,8 +46,8 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 | E.5 | GLES passthrough | C.6 | host EGL/GLES 노출 |
 | E.6 | Virglrenderer | E.5 | 3D acceleration |
 | E.7 | Venus / Vulkan | E.6 | Vulkan API forward |
-| E.8 | 32-bit / x86 translation (옵션) | B, C | arm32 / x86 guest 실행 |
-| E.9 | ROM 보안 업데이트 채널 | E.1, E.2 | signed manifest + CVE 패치 갱신 |
+| E.8 | 32-bit / x86 translation (옵션) | B, C | arm32 / x86 guest 실행 (core gate 와 분리) |
+| E.9 | ROM 보안 업데이트 / 수동 import 채널 | E.1, E.2 | offline-first signed manifest + 사용자 동의 CVE 패치 |
 | E.10 | Phase E 종합 회귀 receiver | E.1~E.9 | `STAGE_PHASE_E_RESULT` 라인 |
 
 ---
@@ -437,6 +438,7 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 
 - arm32 guest binary 가 arm64 host 위에서 실행 (thunk).
 - x86 guest binary 가 arm64 host 위에서 실행 (full TCG).
+- 이 step 은 optional capability 이며, 미구현 상태가 Phase E core 완료를 막지 않는다.
 
 ### 5.8.3 코드 touchpoint
 
@@ -459,7 +461,8 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 
 ### 5.8.5 검증 게이트
 
-- 진단 라인: `STAGE_PHASE_E_TRANSLATION passed=true arch=arm32,x86 binary_run=true`.
+- 기능을 켠 빌드: `STAGE_PHASE_E_TRANSLATION passed=true arch=arm32,x86 binary_run=true`.
+- 기능을 끈 빌드: `STAGE_PHASE_E_TRANSLATION skipped=true reason=optional_disabled`.
 
 ### 5.8.6 위험
 
@@ -468,16 +471,20 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 
 ---
 
-## Step E.9 — ROM 보안 업데이트 채널
+## Step E.9 — ROM 보안 업데이트 / 수동 import 채널
 
 ### 5.9.1 Background
 
 검증 결과 "보안 업데이트 (CVE 패치) 채널" 이 어느 phase 에도 정의되지 않은 점이 발견되었다. Phase E 시점에서는 multi-instance + snapshot + 다중 Android 버전 guest 가 들어와 *guest rootfs 의 CVE 패치 채널* 이 사용자 보안에 직결된다.
 
+단, 상위 plan 은 외부 업데이트 서버, 외부 telemetry, invisible auto-update 를 명시적으로 금지한다. 따라서 Phase E core 모델은 **offline-only signed ROM import** 이며, host 앱이 외부 업데이트 서버에 직접 접속하는 기능은 이 roadmap 의 비목표로 둔다.
+
 ### 5.9.2 목표
 
-- guest ROM 이 signed manifest 로 배포되고, 사용자가 명시 동의 시에만 갱신.
+- guest ROM 이 signed manifest 로 배포되고, 사용자가 명시 동의 시에만 import / 갱신.
 - 갱신 시 기존 인스턴스 데이터 (overlay) 는 보존, base layer 만 교체.
+- 기본 흐름은 사용자가 SAF 로 선택한 local signed manifest + archive 를 검증하는 offline import.
+- host 앱이 업데이트 확인을 위해 외부 서버에 접속하지 않는다.
 - 외부 자동 telemetry 또는 invisible auto-update 는 금지 (plan 1단계 "제외 항목" 일관).
 
 ### 5.9.3 코드 touchpoint
@@ -485,9 +492,9 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 | 파일 | 변경 종류 |
 |---|---|
 | `app/src/main/java/dev/jongwoo/androidvm/storage/RomImageManifest.kt` | signature 필드 추가 |
-| `app/src/main/java/dev/jongwoo/androidvm/storage/RomUpdateChannel.kt` (NEW) | 갱신 채널 정의 |
+| `app/src/main/java/dev/jongwoo/androidvm/storage/RomUpdateChannel.kt` (NEW) | offline signed import 채널 정의 |
 | `app/src/main/java/dev/jongwoo/androidvm/storage/RomInstaller.kt` | base swap 로직 |
-| `app/src/main/java/dev/jongwoo/androidvm/ui/MainActivity.kt` | 사용자 동의 다이얼로그 |
+| `app/src/main/java/dev/jongwoo/androidvm/ui/MainActivity.kt` | SAF import + 사용자 동의 다이얼로그 |
 | `app/src/test/java/.../storage/RomUpdateChannelTest.kt` (NEW) | 단위 테스트 |
 
 ### 5.9.4 세부 작업
@@ -498,33 +505,40 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 - 기본 채널의 public key 는 host 앱 빌드에 embed (release / debug 분리).
 - signature 검증 실패 시 갱신 거부.
 
-#### E.9.b 갱신 흐름
+#### E.9.b 기본 갱신 흐름 — offline signed import
 
 ```text
-1. 사용자가 "ROM 업데이트 확인" 클릭
-2. host 가 signed manifest 1 개 fetch (네트워크 권한은 NetworkBridge 정책 따름)
+1. 사용자가 "ROM 패치 가져오기" 클릭
+2. SAF 로 signed manifest 와 archive 선택
 3. signature 검증 + 현재 base 의 patchLevel 과 비교
 4. 사용자 동의 다이얼로그 (변경된 CVE 목록 / 사이즈)
-5. 동의 시: 새 base 다운로드 → 기존 base 와 atomic swap → snapshot 자동 생성 (E.2)
+5. 동의 시: 새 base 를 local archive 에서 import → 기존 base 와 atomic swap → snapshot 자동 생성 (E.2)
 6. 거부 시: 아무 변경 없음
 ```
 
 - 명시 동의 없는 자동 갱신 금지.
+- signature 검증 전에는 archive 를 실행 가능한 rootfs 로 commit 하지 않는다.
 
-#### E.9.c base swap 의 안전성
+#### E.9.c 명시적 비목표 — network update channel
+
+- host 앱이 외부 업데이트 서버에서 manifest 또는 archive 를 fetch 하지 않는다.
+- background polling, telemetry, 설치된 package 목록 업로드, silent download 금지.
+- 사용자가 별도 브라우저나 다른 배포 채널에서 받은 signed ROM archive 를 SAF 로 가져오는 흐름만 core 로 인정한다.
+
+#### E.9.d base swap 의 안전성
 
 - snapshot (E.2) 이 활성이면 갱신 직전 자동 snapshot 생성.
 - swap 실패 시 자동 rollback (D.9 의 boot health 와 통합).
 
 ### 5.9.5 검증 게이트
 
-- 진단 라인: `STAGE_PHASE_E_SECURITY_UPDATE passed=true signed=true patch_level=<v> consent_gate=on auto_update=off`.
+- 진단 라인: `STAGE_PHASE_E_SECURITY_UPDATE passed=true signed=true patch_level=<v> consent_gate=on channel=offline network_fetch=off auto_update=off telemetry=off`.
 - 단위 테스트: signature 위조 시 갱신 거부.
 
 ### 5.9.6 위험
 
 - private key 누출 시 악성 ROM 배포 가능 → key rotation 정책 + 하드웨어 보호.
-- 사용자가 갱신 거부한 채로 오래 사용 → CVE 노출. UI 에 patch level 노출 + 30 일 후 reminder.
+- 사용자가 갱신 거부한 채로 오래 사용 → CVE 노출. UI 에 patch level 노출 + local reminder.
 - 본 채널은 *guest ROM* 만 다룬다. host APK 자체의 갱신은 Play Store / sideload 흐름 그대로.
 
 ---
@@ -534,14 +548,15 @@ VPhoneOS 의 `librender_server.so`, `libOpenglRender.so` 가 Venus 계열. Vulka
 ### 5.10.1 목표 라인
 
 ```text
-STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=true security_update=true stage_phase_a=true stage_phase_b=true stage_phase_c=true stage_phase_d=true
+STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=skipped security_update=true stage_phase_a=true stage_phase_b=true stage_phase_c=true stage_phase_d=true
 ```
 
 ### 5.10.2 작업
 
 - `StagePhaseEDiagnosticsReceiver` 가 Phase A~D 라인을 emit 한 뒤 E 라인 emit.
 - `StagePhaseEFinalGateTest` 가 출력 형식을 픽스.
-- `translation` 이 옵션이므로 별도 toggle (예: `BuildConfig.AVM_ENABLE_TRANSLATION`) 도입 가능.
+- `translation` 이 옵션이므로 `true` 또는 `skipped` 둘 다 core gate 통과로 인정한다. 기능을 켠 빌드에서 실패하면 `translation=false` 로 Phase E optional gate 실패를 명확히 표시한다.
+- GMS compatibility profile 은 core gate 에 포함하지 않고, 사용자 제공 / license-compliant package 를 별도 appendix gate 로만 다룬다.
 
 ---
 
@@ -549,12 +564,13 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 
 다음을 **모두** 만족하면 long-term roadmap 의 모든 Phase 완료.
 
-- [ ] `STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=true security_update=true ...` 가 emulator log 에 기록.
+- [ ] `STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=(true|skipped) security_update=true ...` 가 emulator log 에 기록.
 - [ ] 동시 N 인스턴스 (≥ 2) 에서 다른 Android 버전 (7.1.2 / 10 / 12 / 임의 조합) 부팅 가능.
 - [ ] Snapshot 만들기 → 사용자 작업 → rollback 정상.
-- [ ] GLES passthrough / Virgl / Venus 중 적어도 하나가 첫 frame 부터 GPU 사용.
+- [ ] E.5 / E.6 / E.7 각각의 gate 가 지원 가능한 검증 host 에서 통과하고, 미지원 host 에서는 graceful degradation 상태가 명확히 표시됨.
 - [ ] ROM signed manifest 검증이 동작하고, 위조 manifest 가 거부됨 (E.9 보안 업데이트).
-- [ ] (옵션) 32-bit / x86 guest binary 한 개가 실행.
+- [ ] (옵션) translation 기능을 켠 빌드에서는 32-bit / x86 guest binary 한 개가 실행. 기능을 끈 빌드는 `translation=skipped` 를 명시.
+- [ ] (옵션) GMS compatibility profile 은 core gate 밖에서만 검증하며, host APK 는 proprietary GMS package 를 번들링하지 않음.
 - [ ] Phase A ~ D 회귀 라인 모두 미회귀.
 - [ ] CI gate 통과.
 
@@ -563,6 +579,7 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 - 256 인스턴스 manifest static component (정적 N개 한도, 권장 4).
 - VPhoneOS 의 native binary 재사용.
 - 광고 SDK / 통계 SDK / 외부 telemetry.
+- 외부 ROM 업데이트 서버 / background update polling / silent auto-update.
 - root 권한 상승 / 호스트 설정 무단 변경.
 
 ## 8. 권장 진행 우선순위
@@ -571,7 +588,7 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 
 1. **E.1 Multi-instance**: 사용자 가시성 큼.
 2. **E.2 Snapshot**: 사용자 워크플로 안정성에 직결.
-3. **E.9 보안 업데이트 채널**: E.1/E.2 가 들어오는 즉시 사용자 보안 직결.
+3. **E.9 보안 업데이트 / 수동 import 채널**: E.1/E.2 가 들어오는 즉시 사용자 보안 직결.
 4. **E.5 GLES passthrough**: SW framebuffer 한계를 첫 단계 해소.
 5. **E.3/E.4 Android 10/12**: 호환성 확장.
 6. **E.6 Virgl**: GLES passthrough 의 한계 (multi-instance, 확장 GL) 보완.

@@ -28,7 +28,7 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 | **B — Guest Runtime PoC** | [`phase-b-guest-runtime-poc.md`](./phase-b-guest-runtime-poc.md) | 단일 PIE arm64 binary 한 개를 host 프로세스 안에서 실제로 실행. 핵심: 코드 모듈화, ELF loader, bionic linker, syscall dispatch, process state machine. |
 | **C — Android Boot** | [`phase-c-android-boot.md`](./phase-c-android-boot.md) | `init`→`zygote64`→`system_server`→`SurfaceFlinger` 부팅. 핵심: 실 binder transport, ashmem/memfd, property service 격상, zygote, system_server, SurfaceFlinger commit. |
 | **D — Usable VM** | [`phase-d-usable-vm.md`](./phase-d-usable-vm.md) | 사용자가 import 한 일반 APK 의 `Activity.onCreate` 진입 + 모든 bridge 실 연동. 핵심: PMS install, launcher, real dex 실행, Camera/Mic/VPN bridge, file import/export. |
-| **E — Compatibility** | [`phase-e-compatibility.md`](./phase-e-compatibility.md) | multi-instance / snapshot / Android 10·12 / GLES·Virgl·Venus / (옵션) 32-bit·x86 translation. |
+| **E — Compatibility** | [`phase-e-compatibility.md`](./phase-e-compatibility.md) | multi-instance / snapshot / Android 10·12 / GLES·Virgl·Venus / (옵션) 32-bit·x86 translation / (옵션) GMS compatibility profile. |
 
 ## 3. Phase 별 Step 요약 표
 
@@ -94,8 +94,8 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 | E.5 | GLES passthrough | host EGL/GLES 노출 |
 | E.6 | Virglrenderer | 3D acceleration |
 | E.7 | Venus / Vulkan | Vulkan API forward |
-| E.8 | 32-bit / x86 translation (옵션) | arm32 / x86 guest 실행 |
-| E.9 | ROM 보안 업데이트 채널 | signed manifest + CVE 패치 갱신 |
+| E.8 | 32-bit / x86 translation (옵션) | arm32 / x86 guest 실행 (core gate 와 분리) |
+| E.9 | ROM 보안 업데이트 / 수동 import 채널 | offline-only signed manifest + 사용자 동의 CVE 패치 |
 | E.10 | Phase E 종합 회귀 receiver | `STAGE_PHASE_E_RESULT` 라인 |
 
 ## 4. 진척 현황 (요약)
@@ -118,6 +118,8 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 - 256 인스턴스용 manifest static component (E.1 은 정적 4개 한도).
 - root 권한 상승 / 호스트 설정 무단 변경 / 권한 우회.
 - `QUERY_ALL_PACKAGES`, `READ_PHONE_STATE`, `WRITE_SETTINGS`, `SYSTEM_ALERT_WINDOW`, 광고 ID manifest 선언 (`ManifestPermissionGuardTest` 가 모든 Phase 에서 강제).
+- ROM 보안 업데이트는 offline signed import 로만 처리한다. host 앱의 외부 업데이트 서버 접속, background polling, telemetry, silent auto-update 는 금지한다.
+- Optional GMS compatibility profile 은 core gate 밖의 license-gated 확장으로만 다루며 proprietary GMS package 를 번들링하지 않는다.
 
 ## 6. 부록 — 현재 stub 위치와 Phase 매핑
 
