@@ -3,9 +3,11 @@ package dev.jongwoo.androidvm.storage
 import android.content.Context
 import java.io.File
 
-class PathLayout(context: Context) {
-    private val root = File(context.filesDir, "avm")
+class PathLayout private constructor(private val root: File) {
+    constructor(context: Context) : this(File(context.filesDir, "avm"))
+
     val auditLogFile: File = File(root, "logs/bridge-audit.log")
+    val runtimeStateFile: File = File(root, "runtime-state.json")
 
     fun ensureRoot(): File = root.apply {
         mkdirs()
@@ -14,7 +16,29 @@ class PathLayout(context: Context) {
         File(this, "logs").mkdirs()
     }
 
+    fun listInstanceIds(): List<String> {
+        val instancesDir = File(ensureRoot(), "instances")
+        if (!instancesDir.isDirectory) return emptyList()
+        return instancesDir.listFiles()
+            ?.filter { it.isDirectory && it.name.matches(VALID_ID) }
+            ?.map { it.name }
+            ?.sorted()
+            ?: emptyList()
+    }
+
+    fun deleteInstance(instanceId: String): Boolean {
+        require(instanceId.matches(VALID_ID)) { "Invalid instanceId: $instanceId" }
+        val instancesRoot = File(ensureRoot(), "instances").canonicalFile
+        val target = File(instancesRoot, instanceId).canonicalFile
+        require(target.parentFile?.canonicalPath == instancesRoot.canonicalPath) {
+            "Instance path escaped instances root: $target"
+        }
+        if (!target.exists()) return false
+        return target.deleteRecursively()
+    }
+
     fun ensureInstance(instanceId: String): InstancePaths {
+        require(instanceId.matches(VALID_ID)) { "Invalid instanceId: $instanceId" }
         val instanceRoot = File(ensureRoot(), "instances/$instanceId")
         val configDir = File(instanceRoot, "config")
         val rootfsDir = File(instanceRoot, "rootfs")
@@ -35,6 +59,13 @@ class PathLayout(context: Context) {
         )
         paths.create()
         return paths
+    }
+
+    companion object {
+        private val VALID_ID = Regex("[A-Za-z0-9_\\-]{1,64}")
+
+        /** Test-only entry point that lets the layout point at any directory. */
+        fun forRoot(avmRoot: File): PathLayout = PathLayout(avmRoot)
     }
 }
 

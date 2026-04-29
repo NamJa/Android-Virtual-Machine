@@ -1,7 +1,11 @@
 package dev.jongwoo.androidvm.ui
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -28,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,10 +58,13 @@ import dev.jongwoo.androidvm.storage.RomInstaller
 import dev.jongwoo.androidvm.storage.RomPipelineSnapshot
 import dev.jongwoo.androidvm.ui.theme.AvmAppTheme
 import dev.jongwoo.androidvm.vm.VmConfig
-import dev.jongwoo.androidvm.vm.VmInstanceService
+import dev.jongwoo.androidvm.vm.VmManagerService
 import dev.jongwoo.androidvm.vm.VmNativeActivity
 import dev.jongwoo.androidvm.vm.VmState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -131,7 +139,9 @@ private fun MainScreen(
     val scope = rememberCoroutineScope()
     val romInstaller = remember(context) { RomInstaller(context) }
     val apkPipeline = remember(context) { ApkInstallPipeline(context) }
-    var state by remember { mutableStateOf(VmState.STOPPED) }
+    val managerHandle = rememberManagerHandle(context)
+    val states by managerHandle.observe().collectAsState()
+    val state = states[config.instanceId] ?: VmState.STOPPED
     var romSnapshot by remember { mutableStateOf(romInstaller.snapshot(config.instanceId)) }
     var romMessage by remember { mutableStateOf("ROM pipeline is ready") }
     var installingRom by remember { mutableStateOf(false) }
@@ -211,26 +221,23 @@ private fun MainScreen(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
-                            onClick = {
-                                VmInstanceService.start(context)
-                                state = VmState.STARTING
-                            },
+                            onClick = { managerHandle.start(config.instanceId) },
                         ) {
                             Text("Start")
                         }
                         OutlinedButton(
                             onClick = {
-                                context.startActivity(Intent(context, VmNativeActivity::class.java))
-                                state = VmState.RUNNING
+                                context.startActivity(
+                                    Intent(context, VmNativeActivity::class.java)
+                                        .putExtra(VmNativeActivity.EXTRA_INSTANCE_ID, config.instanceId),
+                                )
+                                managerHandle.markRunning(config.instanceId)
                             },
                         ) {
                             Text("Open Display")
                         }
                         OutlinedButton(
-                            onClick = {
-                                VmInstanceService.stop(context)
-                                state = VmState.STOPPING
-                            },
+                            onClick = { managerHandle.stop(config.instanceId) },
                         ) {
                             Text("Stop")
                         }
@@ -309,8 +316,11 @@ private fun MainScreen(
                 },
                 onLaunchPackage = { pkg ->
                     apkPipeline.launch(config.instanceId, pkg.packageName)
-                    context.startActivity(Intent(context, VmNativeActivity::class.java))
-                    state = VmState.RUNNING
+                    context.startActivity(
+                        Intent(context, VmNativeActivity::class.java)
+                            .putExtra(VmNativeActivity.EXTRA_INSTANCE_ID, config.instanceId),
+                    )
+                    managerHandle.markRunning(config.instanceId)
                     packageMessage = "Launching ${pkg.label}"
                 },
                 onUninstallPackage = { pkg ->
@@ -354,6 +364,58 @@ private fun MainScreen(
             )
         }
     }
+}
+
+private interface ManagerHandle {
+    fun observe(): StateFlow<Map<String, VmState>>
+    fun start(instanceId: String)
+    fun stop(instanceId: String)
+    fun markRunning(instanceId: String)
+}
+
+private class BoundManagerHandle(
+    private val binder: VmManagerService.LocalBinder,
+) : ManagerHandle {
+    override fun observe(): StateFlow<Map<String, VmState>> = binder.observe()
+    override fun start(instanceId: String) { binder.start(instanceId) }
+    override fun stop(instanceId: String) { binder.stop(instanceId) }
+    override fun markRunning(instanceId: String) { binder.markRunning(instanceId) }
+}
+
+/** Pre-bind handle that buffers user actions until the service connection succeeds. */
+private class PendingManagerHandle : ManagerHandle {
+    private val statesFlow = MutableStateFlow<Map<String, VmState>>(emptyMap())
+    override fun observe(): StateFlow<Map<String, VmState>> = statesFlow.asStateFlow()
+    override fun start(instanceId: String) {
+        statesFlow.value = statesFlow.value.toMutableMap().apply { put(instanceId, VmState.STARTING) }
+    }
+    override fun stop(instanceId: String) {
+        statesFlow.value = statesFlow.value.toMutableMap().apply { put(instanceId, VmState.STOPPING) }
+    }
+    override fun markRunning(instanceId: String) {
+        statesFlow.value = statesFlow.value.toMutableMap().apply { put(instanceId, VmState.RUNNING) }
+    }
+}
+
+@Composable
+private fun rememberManagerHandle(context: Context): ManagerHandle {
+    val pending = remember { PendingManagerHandle() }
+    var handle by remember { mutableStateOf<ManagerHandle>(pending) }
+    DisposableEffect(context) {
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                val binder = service as? VmManagerService.LocalBinder ?: return
+                handle = BoundManagerHandle(binder)
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                handle = pending
+            }
+        }
+        VmManagerService.bind(context, connection)
+        onDispose { runCatching { context.unbindService(connection) } }
+    }
+    return handle
 }
 
 private fun dev.jongwoo.androidvm.apk.ApkPipelineProgress.toPackageMessage(): String {

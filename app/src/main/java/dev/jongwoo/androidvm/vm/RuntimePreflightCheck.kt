@@ -12,7 +12,7 @@ object RuntimePreflightCheck {
         instanceId: String = VmConfig.DEFAULT_INSTANCE_ID,
     ): RuntimePreflightResult {
         val store = InstanceStore(context)
-        val config = store.ensureDefaultConfig()
+        val config = resolveConfig(store, instanceId)
         val snapshot = RomInstaller(context).snapshot(instanceId)
         if (!snapshot.isInstalled) {
             return RuntimePreflightResult.Blocked(
@@ -43,6 +43,9 @@ object RuntimePreflightCheck {
 
         return RuntimePreflightResult.Ready(config, snapshot)
     }
+
+    internal fun resolveConfig(store: InstanceStore, instanceId: String): VmConfig =
+        store.ensureConfig(instanceId)
 }
 
 sealed interface RuntimePreflightResult {

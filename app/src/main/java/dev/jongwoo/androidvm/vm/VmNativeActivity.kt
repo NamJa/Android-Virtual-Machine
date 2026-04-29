@@ -16,7 +16,7 @@ import android.widget.TextView
 import dev.jongwoo.androidvm.R
 
 class VmNativeActivity : Activity(), SurfaceHolder.Callback {
-    private val instanceId = VmConfig.DEFAULT_INSTANCE_ID
+    private lateinit var instanceId: String
     private lateinit var surfaceView: SurfaceView
     private var attached = false
     private var densityDpi = 320
@@ -25,8 +25,10 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         densityDpi = resources.displayMetrics.densityDpi
+        instanceId = intent.getStringExtra(EXTRA_INSTANCE_ID)?.takeIf { it.isNotBlank() }
+            ?: VmConfig.DEFAULT_INSTANCE_ID
 
-        val preflight = RuntimePreflightCheck.run(this)
+        val preflight = RuntimePreflightCheck.run(this, instanceId)
         if (preflight is RuntimePreflightResult.Blocked) {
             setContentView(createBlockedView(preflight.message))
             return
@@ -42,7 +44,7 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
         if (nativeState != NativeRuntimeState.RUNNING) {
             VmNativeBridge.initInstance(config.instanceId, config.toJson())
         }
-        VmInstanceService.start(this)
+        VmInstanceService.start(this, instanceId)
 
         surfaceView = VmSurfaceView(this).apply {
             onInput = { event -> forwardTouch(event) }
@@ -145,6 +147,10 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
                 event.getY(index),
             )
         }
+    }
+
+    companion object {
+        const val EXTRA_INSTANCE_ID = "extra.instanceId"
     }
 }
 

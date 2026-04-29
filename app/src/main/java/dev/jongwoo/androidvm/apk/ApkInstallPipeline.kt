@@ -37,12 +37,12 @@ object ApkPipelineErrorCode {
 }
 
 interface ApkImportDispatcher {
-    fun dispatch(stagedPath: String)
+    fun dispatch(instanceId: String, stagedPath: String)
 }
 
 class ServiceApkImportDispatcher(private val context: Context) : ApkImportDispatcher {
-    override fun dispatch(stagedPath: String) {
-        VmInstanceService.importApk(context, stagedPath)
+    override fun dispatch(instanceId: String, stagedPath: String) {
+        VmInstanceService.importApk(context, instanceId, stagedPath)
     }
 }
 
@@ -56,19 +56,19 @@ class ApkInstallPipeline(
 ) {
 
     fun uninstall(instanceId: String, packageName: String) {
-        VmInstanceService.uninstallPackage(context, packageName)
+        VmInstanceService.uninstallPackage(context, instanceId, packageName)
     }
 
     fun clearData(instanceId: String, packageName: String) {
-        VmInstanceService.clearPackageData(context, packageName)
+        VmInstanceService.clearPackageData(context, instanceId, packageName)
     }
 
     fun launch(instanceId: String, packageName: String) {
-        VmInstanceService.launchPackage(context, packageName)
+        VmInstanceService.launchPackage(context, instanceId, packageName)
     }
 
     fun stop(instanceId: String, packageName: String) {
-        VmInstanceService.stopPackage(context, packageName)
+        VmInstanceService.stopPackage(context, instanceId, packageName)
     }
 
     fun importAndInstall(
@@ -172,7 +172,7 @@ class ApkInstallPipeline(
 
         onProgress(ApkPipelineProgress(ApkPipelineStage.DISPATCH, null, null))
         val wasInstalled = loadPackages(request.instanceId).any { it.packageName == info.packageName }
-        dispatcher.dispatch(stagedFile.absolutePath)
+        dispatcher.dispatch(request.instanceId, stagedFile.absolutePath)
 
         val committed = awaitPackageCommit(
             instanceId = request.instanceId,
