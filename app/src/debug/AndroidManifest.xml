@@ -29,5 +29,12 @@
                 <action android:name="dev.jongwoo.androidvm.debug.RUN_STAGE7_DIAGNOSTICS" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".debug.StagePhaseADiagnosticsReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_PHASE_A_DIAGNOSTICS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

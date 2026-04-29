@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pick up the Android SDK by writing `local.properties` with `sdk.dir=...` if Gradle does not auto-detect it. JDK 17 is required.
 
+The same canonical gate runs in CI on every push and PR via `.github/workflows/ci.yml`. The workflow has a fast `manifest-guard` job (forbidden-permission test only) gating the full `gradle-gate` job, so a PR that adds a denylisted permission fails in well under a minute.
+
 ```sh
 # Canonical readiness check (matches docs/planning/pre_stage6_readiness.md)
 JAVA_HOME=$(/usr/libexec/java_home -v 17) ./gradlew --no-daemon \
@@ -44,8 +46,10 @@ This is a clean-room **Android-on-Android user-space VM**. The host APK ships a 
 
 The Android manifest splits the app across two OS processes on purpose:
 
-- Default process: `MainActivity` (Compose control surface) and `VmManagerService` (lifecycle bookkeeping).
+- Default process: `MainActivity` (Compose control surface) and `VmManagerService` (lifecycle bookkeeping + per-instance `VmState` persistence in `<filesDir>/avm/runtime-state.json`).
 - `:vm1` process: `VmNativeActivity` (fullscreen `Surface`) and `VmInstanceService` (foreground `dataSync` service that owns the native runtime). The native library is loaded here, so all `VmNativeBridge` calls from `:vm1` hit the same in-memory `Instance` table; calls from the default process see a *different* native state and should be limited to read-only smoke checks.
+
+Authoritative runtime state lives with `VmInstanceService` in `:vm1`. The default process never trusts a value it computed from a local `VmNativeBridge` call; instead `VmManagerService` binds `VmInstanceService`, registers a reply `Messenger`, and lets `:vm1` push state changes through the [`VmIpcContract`](app/src/main/java/dev/jongwoo/androidvm/vm/VmIpcContract.kt). Every cross-process payload is carried in a `Bundle` with `KEY_INSTANCE_ID` + `KEY_PAYLOAD_JSON` (a JSON string) — no raw bridge content (clipboard, location, package bytes) is ever sent over this channel. When you add a new cross-process message, add the `MSG_*` constant, the codec, and a `VmIpcContractTest` case in the same change.
 
 `VmInstanceService.startRuntime()` is the canonical boot path: `RuntimePreflightCheck` → `VmNativeBridge.initHost` → `initInstance(configJson)` → `startGuest`. Preflight reads `InstanceStore` and `RomInstaller.snapshot()`; if the rootfs is missing or unhealthy, the service refuses to start and surfaces an error state instead of partially booting.
 
