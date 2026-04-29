@@ -6,8 +6,10 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import dev.jongwoo.androidvm.storage.InstanceStore
+import dev.jongwoo.androidvm.storage.RomInstallStatus
 import dev.jongwoo.androidvm.storage.RomInstaller
 import dev.jongwoo.androidvm.vm.GuestPathStatus
+import dev.jongwoo.androidvm.vm.PhaseBNativeBridge
 import dev.jongwoo.androidvm.vm.VmNativeBridge
 import java.io.File
 
@@ -16,10 +18,21 @@ class Stage4DiagnosticsReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_RUN_STAGE4_DIAGNOSTICS) return
 
         val config = InstanceStore(context).ensureDefaultConfig()
-        val snapshot = RomInstaller(context).snapshot(config.instanceId)
+        val installer = RomInstaller(context)
+        var snapshot = installer.snapshot(config.instanceId)
         if (!snapshot.isInstalled) {
-            Log.e(TAG, "STAGE4_VFS_RESULT passed=false reason=${snapshot.imageState}")
-            return
+            val outcome = installer.installDefault(config.instanceId)
+            if (outcome.status != RomInstallStatus.INSTALLED &&
+                outcome.status != RomInstallStatus.ALREADY_HEALTHY
+            ) {
+                Log.e(TAG, "STAGE4_VFS_RESULT passed=false reason=${snapshot.imageState}")
+                return
+            }
+            snapshot = installer.snapshot(config.instanceId)
+            if (!snapshot.isInstalled) {
+                Log.e(TAG, "STAGE4_VFS_RESULT passed=false reason=${snapshot.imageState}")
+                return
+            }
         }
 
         VmNativeBridge.initHost(
@@ -59,7 +72,7 @@ class Stage4DiagnosticsReceiver : BroadcastReceiver() {
 
         passed = passed && runFdDiagnostics(config.instanceId)
         passed = passed && runPropertyDiagnostics(config.instanceId)
-        passed = passed && runGuestRuntimeDiagnostics(config.instanceId, logPath)
+        passed = passed && runGuestRuntimeDiagnostics(context, config.instanceId, logPath)
 
         Log.i(TAG, "STAGE4_VFS_RESULT passed=$passed cases=${cases.size}")
     }
@@ -128,25 +141,39 @@ class Stage4DiagnosticsReceiver : BroadcastReceiver() {
         return passed
     }
 
-    private fun runGuestRuntimeDiagnostics(instanceId: String, logPath: String): Boolean {
+    private fun runGuestRuntimeDiagnostics(context: Context, instanceId: String, logPath: String): Boolean {
         val startResult = VmNativeBridge.startGuest(instanceId)
         Thread.sleep(250)
         val logText = runCatching { File(logPath).readText() }.getOrDefault("")
         val packageHandle = VmNativeBridge.getBinderServiceHandle(instanceId, "package")
         val activityHandle = VmNativeBridge.getBinderServiceHandle(instanceId, "activity")
         val bootstrapStatus = VmNativeBridge.getBootstrapStatus(instanceId)
+        val binary = File(context.filesDir, "avm/instances/$instanceId/rootfs/system/bin/avm-hello")
+        val binaryResult = if (binary.isFile) {
+            PhaseBNativeBridge.runGuestBinary(
+                instanceId = instanceId,
+                binaryPath = binary.absolutePath,
+                args = arrayOf("/system/bin/avm-hello"),
+                timeoutMillis = 5_000,
+            )
+        } else {
+            null
+        }
         VmNativeBridge.stopGuest(instanceId)
 
-        val guestProcessOk = logText.contains("guest_process entrypoint reached")
+        val guestProcessOk = logText.contains("guest runtime entrypoint reached")
         val syscallOk = logText.contains("syscall smoke ok")
         val binderOk = packageHandle > 0 && activityHandle > 0 && logText.contains("binder smoke registered core services")
         val bootstrapOk = bootstrapStatus.contains("zygote=attempted") &&
-            bootstrapStatus.contains("system_server=blocked:elf_loader_missing")
-        val passed = startResult == 0 && guestProcessOk && syscallOk && binderOk && bootstrapOk
+            bootstrapStatus.contains("system_server=blocked:phase_c_pending")
+        val binaryOk = binaryResult?.ok == true &&
+            binaryResult.exitCode == 0 &&
+            binaryResult.stdout.trim() == "hello"
+        val passed = startResult == 0 && guestProcessOk && syscallOk && binderOk && bootstrapOk && binaryOk
         Log.i(
             TAG,
             "STAGE4_RUNTIME_RESULT passed=$passed start=$startResult guest=$guestProcessOk " +
-                "syscall=$syscallOk binder=$binderOk bootstrap=$bootstrapStatus",
+                "binary=$binaryOk syscall=$syscallOk binder=$binderOk bootstrap=$bootstrapStatus",
         )
         return passed
     }

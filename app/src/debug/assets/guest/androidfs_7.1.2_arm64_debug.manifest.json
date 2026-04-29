@@ -3,9 +3,9 @@
   "guestVersion": "7.1.2",
   "guestArch": "arm64",
   "format": "zip",
-  "compressedSize": 1587,
-  "uncompressedSize": 327,
-  "sha256": "2641d5226fe923f4a0266b0911da5188cedc86c480044daefe0197fa1eca5641",
+  "compressedSize": 4545,
+  "uncompressedSize": 7263,
+  "sha256": "ca5365175b8ac3ed811f5cd22192f4f0e42d3244012d2dcf7b78f9535a4d2fb7",
   "createdAt": "2024-01-01T00:00:00Z",
   "minHostSdk": 26
 }

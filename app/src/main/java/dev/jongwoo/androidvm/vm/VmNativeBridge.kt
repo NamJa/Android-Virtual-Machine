@@ -149,4 +149,16 @@ object VmNativeBridge {
 
     @JvmStatic
     external fun getBridgeRuntimeStatus(instanceId: String): String
+
+    fun runGuestBinary(
+        instanceId: String,
+        binaryPath: String,
+        args: Array<String>,
+        timeoutMillis: Long,
+    ): GuestExecutionResult = PhaseBNativeBridge.runGuestBinary(
+        instanceId = instanceId,
+        binaryPath = binaryPath,
+        args = args,
+        timeoutMillis = timeoutMillis,
+    )
 }
