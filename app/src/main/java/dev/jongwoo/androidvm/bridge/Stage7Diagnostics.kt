@@ -71,9 +71,9 @@ class Stage7Diagnostics(
     }
 
     private fun verifyManifest(text: String): Boolean {
+        // Phase D ships the camera / microphone bridges, so the manifest may now declare CAMERA
+        // and RECORD_AUDIO. The denylist still locks the always-forbidden permissions.
         if (Stage7BridgeScope.forbiddenManifestPermissions.any { text.contains(it) }) return false
-        if (text.contains("android.permission.CAMERA")) return false
-        if (text.contains("android.permission.RECORD_AUDIO")) return false
         return true
     }
 
@@ -196,9 +196,9 @@ class Stage7Diagnostics(
         if (vm.state.value.policies != DefaultBridgePolicies.all) return false
         vm.onAction(BridgeSettingsAction.SetPolicy(BridgeType.CLIPBOARD, BridgeMode.CLIPBOARD_BIDIRECTIONAL))
         if (store.load().getValue(BridgeType.CLIPBOARD).mode != BridgeMode.CLIPBOARD_BIDIRECTIONAL) return false
-        // unsupported bridge cannot be flipped on
+        // Phase D: camera/mic bridges are now supported — flipping ENABLED must persist.
         vm.onAction(BridgeSettingsAction.SetPolicy(BridgeType.CAMERA, BridgeMode.ENABLED))
-        if (store.load().getValue(BridgeType.CAMERA).mode != BridgeMode.UNSUPPORTED) return false
+        if (store.load().getValue(BridgeType.CAMERA).mode != BridgeMode.ENABLED) return false
         vm.onAction(BridgeSettingsAction.ResetPolicies)
         return store.load() == DefaultBridgePolicies.all
     }

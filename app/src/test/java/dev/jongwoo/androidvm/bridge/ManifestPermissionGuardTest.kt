@@ -3,6 +3,7 @@ package dev.jongwoo.androidvm.bridge
 import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ManifestPermissionGuardTest {
@@ -18,23 +19,33 @@ class ManifestPermissionGuardTest {
     }
 
     @Test
-    fun cameraAndMicrophonePermissionsAreNotDeclaredForStage7Mvp() {
+    fun phaseDDeclaresCameraAndMicrophonePermissions() {
         val manifest = readManifest()
         listOf(
             "android.permission.CAMERA",
             "android.permission.RECORD_AUDIO",
         ).forEach { permission ->
-            assertFalse(
-                "Stage 07 MVP must not declare $permission until media bridge ships",
+            assertTrue(
+                "Phase D must declare $permission for the media bridges",
                 manifest.contains(permission),
             )
         }
     }
 
     @Test
-    fun stage7BridgeScopeFlagsCameraAndMicrophoneAsUnsupportedMvp() {
-        assertFalse(Stage7BridgeScope.isSupported(BridgeType.CAMERA))
-        assertFalse(Stage7BridgeScope.isSupported(BridgeType.MICROPHONE))
+    fun stage7BridgeScopeFlagsCameraAndMicrophoneAsSupportedAfterPhaseD() {
+        assertTrue(Stage7BridgeScope.isSupported(BridgeType.CAMERA))
+        assertTrue(Stage7BridgeScope.isSupported(BridgeType.MICROPHONE))
+    }
+
+    @Test
+    fun phaseDDefaultPolicyKeepsCameraAndMicrophoneOff() {
+        // Even though they are now SUPPORTED bridges, the per-instance default policy must keep
+        // them dark until the user explicitly enables them.
+        val cam = DefaultBridgePolicies.forBridge(BridgeType.CAMERA)
+        val mic = DefaultBridgePolicies.forBridge(BridgeType.MICROPHONE)
+        assertFalse(cam.enabled)
+        assertFalse(mic.enabled)
     }
 
     private fun readManifest(): String {

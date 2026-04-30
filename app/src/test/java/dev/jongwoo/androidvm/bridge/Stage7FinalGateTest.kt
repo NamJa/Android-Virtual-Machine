@@ -129,13 +129,14 @@ class Stage7FinalGateTest {
     }
 
     @Test
-    fun stage7DiagnosticsManifestCheckFailsForCameraPermission() {
+    fun stage7DiagnosticsManifestCheckAcceptsCameraPermissionAfterPhaseD() {
+        // Phase D ships the camera bridge so Stage 7 no longer rejects CAMERA in the manifest.
         val diagnostics = Stage7Diagnostics(
             workspaceRoot = tempDir("stage7-camera"),
             manifestText = "<manifest>android.permission.CAMERA</manifest>",
             regressionProbe = { Stage7RegressionResult(stage4 = true, stage5 = true, stage6 = true) },
         )
-        assertFalse(diagnostics.run().manifest)
+        assertTrue(diagnostics.run().manifest)
     }
 
     @Test

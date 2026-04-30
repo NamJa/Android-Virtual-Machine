@@ -153,9 +153,9 @@ class StagePhaseADiagnostics(
         // The receiver cannot inspect the GitHub workflow file from inside the APK; instead it
         // verifies the same forbidden-permission invariant that CI guards (a denylisted
         // permission would have to be declared in the manifest to slip past the gate).
+        // Phase D ships the camera / microphone bridges so CAMERA / RECORD_AUDIO are now allowed
+        // in the manifest; the denylist still locks the always-forbidden permissions.
         if (Stage7BridgeScope.forbiddenManifestPermissions.any { manifestText.contains(it) }) return false
-        if (manifestText.contains("android.permission.CAMERA")) return false
-        if (manifestText.contains("android.permission.RECORD_AUDIO")) return false
         return true
     }
 }

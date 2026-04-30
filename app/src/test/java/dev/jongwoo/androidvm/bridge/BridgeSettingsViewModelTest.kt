@@ -43,15 +43,15 @@ class BridgeSettingsViewModelTest {
     }
 
     @Test
-    fun setPolicyOnUnsupportedBridgeIsIgnored() {
+    fun setPolicyOnCameraEnablesAfterPhaseDSupport() {
         val (vm, store, audit) = newVm()
 
         vm.onAction(BridgeSettingsAction.SetPolicy(BridgeType.CAMERA, BridgeMode.ENABLED))
 
         val saved = store.load().getValue(BridgeType.CAMERA)
-        assertEquals(BridgeMode.UNSUPPORTED, saved.mode)
-        assertFalse(saved.enabled)
-        assertTrue(audit.read().isEmpty())
+        assertEquals(BridgeMode.ENABLED, saved.mode)
+        assertTrue(saved.enabled)
+        assertEquals(1, audit.read().size)
     }
 
     @Test

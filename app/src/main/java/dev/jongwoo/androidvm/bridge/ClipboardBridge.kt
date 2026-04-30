@@ -28,7 +28,22 @@ class ClipboardBridge(
     private val auditLog: BridgeAuditLog,
     private val hostClipboard: HostClipboard,
     private val maxBytes: Int = DEFAULT_MAX_BYTES,
+    private val onChangedThrottle: ChangeListenerThrottle =
+        ChangeListenerThrottle(ChangeListenerThrottle.CLIPBOARD_DEFAULT_MS),
 ) {
+    /**
+     * Phase D.4: invoked when the host's [android.content.ClipboardManager.OnPrimaryClipChangedListener]
+     * fires. Returns true if the listener should propagate the change to the guest, false if the
+     * throttle decided to drop this signal. Off / non-bidirectional modes also drop without
+     * triggering the throttle.
+     */
+    fun onHostClipboardChanged(): Boolean {
+        val policy = policyStore.load().getValue(BridgeType.CLIPBOARD)
+        if (!policy.enabled) return false
+        if (policy.mode !in HOST_TO_GUEST_MODES) return false
+        return onChangedThrottle.accept()
+    }
+
     fun hostToGuest(instanceId: String): BridgeResponse {
         val policy = policyStore.load().getValue(BridgeType.CLIPBOARD)
         if (!policy.enabled || policy.mode !in HOST_TO_GUEST_MODES) {

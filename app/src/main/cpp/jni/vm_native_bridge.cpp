@@ -175,6 +175,7 @@ struct Instance {
     int64_t importCount = 0;
     int64_t activityManagerTransactions = 0;
     int64_t appProcessLaunches = 0;
+    int64_t activityOnCreateCount = 0;
     int64_t windowAttachCount = 0;
     int64_t windowCommitCount = 0;
     int64_t inputDispatchCount = 0;
@@ -3003,6 +3004,7 @@ std::string packageOperationStatusJson(const Instance& instance) {
        << "\"clearDataCount\":" << instance.clearDataCount << ','
        << "\"activityManagerTransactions\":" << instance.activityManagerTransactions << ','
        << "\"appProcessLaunches\":" << instance.appProcessLaunches << ','
+       << "\"activityOnCreateCount\":" << instance.activityOnCreateCount << ','
        << "\"windowAttachCount\":" << instance.windowAttachCount << ','
        << "\"windowCommitCount\":" << instance.windowCommitCount << ','
        << "\"inputDispatchCount\":" << instance.inputDispatchCount << ','
@@ -3513,6 +3515,7 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_launchPackage(
         instance->launchAttempts++;
         instance->launchSuccesses++;
         instance->appProcessLaunches++;
+        instance->activityOnCreateCount++;
         instance->windowAttachCount++;
         instance->foregroundPid = instance->nextGuestPid++;
         instance->foregroundPackage = pkg;
@@ -3548,8 +3551,90 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_launchPackage(
         "runtime activity launch package=" + pkg +
             " activity=" + launcher
     );
+    appendInstanceLog(
+        instance,
+        "ActivityThread: Performing launch of ActivityRecord{" + pkg + "/" + launcher + "}"
+    );
+    appendInstanceLog(instance, pkg + ": onCreate");
+    AVM_LOGI(
+        "ActivityThread: Performing launch of ActivityRecord{%s/%s}",
+        pkg.c_str(),
+        launcher.c_str()
+    );
+    AVM_LOGI("%s: onCreate", pkg.c_str());
     AVM_LOGI("launchPackage id=%s package=%s activity=%s", id.c_str(), pkg.c_str(), launcher.c_str());
     return kOk;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_installApkViaPms(
+    JNIEnv* env,
+    jclass cls,
+    jstring instanceId,
+    jstring stagedApkPath,
+    jint flags
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    (void) flags;
+    const jint rc = Java_dev_jongwoo_androidvm_vm_VmNativeBridge_importApk(
+        env,
+        cls,
+        instanceId,
+        stagedApkPath
+    );
+    auto instance = findInstance(id);
+    std::string packageName;
+    std::string outcome;
+    std::string message;
+    if (instance) {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        packageName = instance->lastPackageName;
+        outcome = instance->lastPackageOutcome;
+        message = instance->lastPackageMessage;
+        appendPackageInstallLog(
+            *instance,
+            "PMS_INSTALL " + (packageName.empty() ? std::string("<unknown>") : packageName) +
+                " status=" + (rc == kOk && outcome == "ok" ? "success" : outcome)
+        );
+    }
+    const bool ok = rc == kOk && outcome == "ok" && !packageName.empty();
+    std::ostringstream os;
+    os << "{"
+       << "\"status\":\"" << (ok ? "success" : "failed_other") << "\",";
+    if (packageName.empty()) {
+        os << "\"packageName\":null,";
+    } else {
+        os << "\"packageName\":\"" << escapeJson(packageName) << "\",";
+    }
+    os << "\"message\":\"" << escapeJson(message.empty() ? (ok ? "installed" : "pms_install_failed") : message)
+       << "\"}";
+    return env->NewStringUTF(os.str().c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_listGuestPackages(
+    JNIEnv* env,
+    jclass cls,
+    jstring instanceId
+) {
+    return Java_dev_jongwoo_androidvm_vm_VmNativeBridge_listPackages(env, cls, instanceId);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_launchGuestActivity(
+    JNIEnv* env,
+    jclass cls,
+    jstring instanceId,
+    jstring packageName,
+    jstring activity
+) {
+    (void) activity;
+    return Java_dev_jongwoo_androidvm_vm_VmNativeBridge_launchPackage(
+        env,
+        cls,
+        instanceId,
+        packageName
+    );
 }
 
 extern "C" JNIEXPORT jint JNICALL

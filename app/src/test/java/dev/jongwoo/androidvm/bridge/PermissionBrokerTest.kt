@@ -144,14 +144,14 @@ class PermissionBrokerTest {
     }
 
     @Test
-    fun setBridgePolicyForcesUnsupportedScopeBridgesToRemainUnsupported() {
+    fun setBridgePolicyAllowsCameraToBeEnabledAfterPhaseD() {
         val (broker, _, store) = newBroker()
 
         broker.setBridgePolicy(INSTANCE, BridgeType.CAMERA, BridgeMode.ENABLED)
         val cameraPolicy = store.load().getValue(BridgeType.CAMERA)
 
-        assertEquals(BridgeMode.UNSUPPORTED, cameraPolicy.mode)
-        assertFalse(cameraPolicy.enabled)
+        assertEquals(BridgeMode.ENABLED, cameraPolicy.mode)
+        assertTrue(cameraPolicy.enabled)
     }
 
     @Test

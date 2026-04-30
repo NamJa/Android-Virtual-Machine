@@ -120,10 +120,19 @@ object VmNativeBridge {
     external fun importApk(instanceId: String, stagedApkPath: String): Int
 
     @JvmStatic
+    external fun installApkViaPms(instanceId: String, stagedApkPath: String, flags: Int): String
+
+    @JvmStatic
     external fun listPackages(instanceId: String): String
 
     @JvmStatic
+    external fun listGuestPackages(instanceId: String): String
+
+    @JvmStatic
     external fun launchPackage(instanceId: String, packageName: String): Int
+
+    @JvmStatic
+    external fun launchGuestActivity(instanceId: String, packageName: String, activity: String): Int
 
     @JvmStatic
     external fun stopPackage(instanceId: String, packageName: String): Int
