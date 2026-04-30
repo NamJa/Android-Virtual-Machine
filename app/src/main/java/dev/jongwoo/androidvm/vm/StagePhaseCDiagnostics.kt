@@ -44,6 +44,9 @@ data class StagePhaseCBootProbe(
  */
 class StagePhaseCDiagnostics(
     private val bootProbe: () -> StagePhaseCBootProbe = { StagePhaseCBootProbe() },
+    private val binderProbe: () -> Boolean = { true },
+    private val ashmemProbe: () -> Boolean = { true },
+    private val propertyProbe: () -> Boolean = { true },
     private val phaseAProbe: () -> Boolean = { false },
     private val phaseBProbe: () -> Boolean = { false },
     private val emit: (String) -> Unit = {},
@@ -51,11 +54,17 @@ class StagePhaseCDiagnostics(
     fun run(): StagePhaseCResultLine {
         val probe by lazy(LazyThreadSafetyMode.NONE) { bootProbe() }
         val binder = check("STAGE_PHASE_C_BINDER",
-            "add=ok get=ok roundtrip=ok parcel_bytes=equal threads=4") { verifyBinder() }
+            "add=ok get=ok roundtrip=ok parcel_bytes=equal threads=4") {
+            verifyBinder() && binderProbe()
+        }
         val ashmem = check("STAGE_PHASE_C_ASHMEM",
-            "alloc=ok mmap=ok cross_thread=ok size=4096") { verifyAshmem() }
+            "alloc=ok mmap=ok cross_thread=ok size=4096") {
+            verifyAshmem() && ashmemProbe()
+        }
         val property = check("STAGE_PHASE_C_PROPERTY",
-            "area=mmap trie=ok init_zygote=running set_get_roundtrip=ok") { verifyProperty() }
+            "area=mmap trie=ok init_zygote=running set_get_roundtrip=ok") {
+            verifyProperty() && propertyProbe()
+        }
         val zygote = check("STAGE_PHASE_C_ZYGOTE",
             "main_loop=ok socket=accepting libs_loaded=${probe.libsLoaded}") {
             verifyZygote() && probe.zygoteAccepting && probe.libsLoaded >= ArtRuntimeChain.EXPECTED_COUNT

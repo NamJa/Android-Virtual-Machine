@@ -2,6 +2,7 @@
 
 #include "loader/elf_loader.h"
 #include "syscall/syscall_dispatch.h"
+#include "syscall/socket.h"
 
 #include <cerrno>
 #include <cstdint>
@@ -261,6 +262,7 @@ void registerPhaseBSyscalls(avm::syscall::SyscallTable &table) {
   table.registerHandler(nr::MPROTECT, "mprotect", sysMprotect);
   table.registerHandler(nr::PRLIMIT64, "prlimit64", sysUnsupportedOk);
   table.registerHandler(nr::SET_TID_ADDRESS, "set_tid_address", sysZero);
+  registerSocketSyscalls(table);
 }
 
 bool runSyscallRoundTrip(avm::syscall::SyscallTable &table) {

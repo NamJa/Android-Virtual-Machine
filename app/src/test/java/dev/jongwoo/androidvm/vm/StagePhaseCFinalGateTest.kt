@@ -198,6 +198,21 @@ class StagePhaseCFinalGateTest {
         assertTrue(text.contains("dev.jongwoo.androidvm.debug.RUN_PHASE_C_DIAGNOSTICS"))
     }
 
+    @Test
+    fun phaseCReceiverUsesRealRegressionAndBootProbes() {
+        val receiver = projectFile(
+            "app/src/debug/java/dev/jongwoo/androidvm/debug/StagePhaseCDiagnosticsReceiver.kt",
+        )
+        assertNotNull("Phase C receiver missing", receiver)
+        val text = receiver!!.readText()
+        assertTrue(text.contains("PhaseDiagnosticProbes.runPhaseBDiagnostics"))
+        assertTrue(text.contains("PhaseDiagnosticProbes.verifyCrossProcessState"))
+        assertTrue(text.contains("PhaseCNativeBridge.bootProbe"))
+        assertFalse(text.contains("crossProcessStateProbe = { true }"))
+        assertFalse(text.contains("boot_probe_pending_phase_b3_on_device"))
+        assertFalse(text.contains("executed = false"))
+    }
+
     private fun projectFile(relativePath: String): File? {
         val candidates = listOf(
             File(relativePath),

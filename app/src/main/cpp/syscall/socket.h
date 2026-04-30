@@ -31,6 +31,12 @@ SyscallResult sysListen(uint64_t fd, uint64_t backlog,
                         uint64_t, uint64_t, uint64_t, uint64_t);
 SyscallResult sysAccept4(uint64_t fd, uint64_t addr, uint64_t addrlen, uint64_t flags,
                          uint64_t, uint64_t);
+SyscallResult sysConnect(uint64_t fd, uint64_t addr, uint64_t addrlen,
+                         uint64_t, uint64_t, uint64_t);
+SyscallResult sysSendto(uint64_t fd, uint64_t buf, uint64_t len, uint64_t flags,
+                        uint64_t addr, uint64_t addrlen);
+SyscallResult sysRecvfrom(uint64_t fd, uint64_t buf, uint64_t len, uint64_t flags,
+                          uint64_t addr, uint64_t addrlen);
 
 void registerSocketSyscalls(SyscallTable& table);
 

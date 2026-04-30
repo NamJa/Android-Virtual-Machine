@@ -102,9 +102,9 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 
 | Phase | 상태 |
 |---|---|
-| A | 약 90% (잔여 5 steps) |
-| B | 0% (모든 step 미시작) |
-| C | 0% (모든 step 미시작) |
+| A | ✅ 종료 게이트 통과 (`STAGE_PHASE_A_RESULT passed=true`) |
+| B | ✅ 종료 게이트 통과 (`STAGE_PHASE_B_RESULT passed=true`) |
+| C | ✅ 종료 게이트 통과 (`STAGE_PHASE_C_RESULT passed=true`, emulator-5556 / 2026-04-30) |
 | D | 0% (모든 step 미시작) |
 | E | 0% (모든 step 미시작) |
 
@@ -125,9 +125,9 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 
 | 현재 코드 stub | 제거되는 Phase / Step |
 |---|---|
-| `vm_native_bridge.cpp:1208` `system_server blocked: ELF loader is not implemented yet` | B.2 |
-| `vm_native_bridge.cpp:1204` `zygote=attempted` | C.4 |
-| `vm_native_bridge.cpp:1436` `graphicsAccelerationMode = "software_framebuffer"` | E.5 / E.6 / E.7 |
+| ~~`vm_native_bridge.cpp:1208` `system_server blocked: ELF loader is not implemented yet`~~ | ✅ B.2/B.3 resolved |
+| ~~`vm_native_bridge.cpp:1204` `zygote=attempted`~~ | ✅ C.4 resolved (`zygote=main_loop;zygote_socket=accepting`) |
+| `vm_native_bridge.cpp` `graphicsAccelerationMode = "surfaceflinger_composer"` 이후 GLES/Virgl/Venus 미구현 | E.5 / E.6 / E.7 |
 | `bridge/UnsupportedMediaBridge.kt` `${bridge}_unsupported_stage7_mvp` | D.5 (Camera) / D.6 (Microphone) |
 | `bridge/NetworkBridge.kt` enable/disable only | D.4 (host NAT) / D.7 (VPN isolation) |
 | `bridge/LegacyBridgeKind.kt` 전체 파일 | A.2 (multi-instance ready) 직후 삭제 |

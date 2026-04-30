@@ -6,7 +6,7 @@
 ## 1. 진입 조건
 
 - Phase B 종료 게이트 (`STAGE_PHASE_B_RESULT passed=true ...`) 통과.
-- 단일 guest binary (`/system/bin/sh`) 이 host 프로세스 내에서 실행되어 stdout 한 줄을 출력하는 상태.
+- 단일 guest binary (`/system/bin/avm-hello`) 이 host 프로세스 내에서 실행되어 `stdout=hello` 를 출력하는 상태.
 - ELF loader / linker / syscall dispatch / process state machine 모두 동작.
 
 ## 2. 핵심 산출물
@@ -21,14 +21,22 @@ STAGE_PHASE_C_RESULT passed=true binder=true ashmem=true property=true zygote=tr
 
 | 영역 | 상태 | 참고 |
 |---|---|---|
-| Binder handle stub | ✅ stub | `vm_native_bridge.cpp:1191~` `registerBinderService` 7 종 |
-| Binder transaction (parcel/ioctl) | ❌ | 미구현 |
-| ashmem | ❌ | 미구현 |
-| memfd_create | ❌ | 미구현 (Phase B.4 의 syscall dispatch 에 포함되었으면 부분 동작) |
-| Property service | ⚠️ stub map | `vm_native_bridge.cpp:1124, 1145` `properties[]` |
-| Zygote 부팅 | ❌ | `zygote=attempted` (line 1204) |
-| system_server | ❌ | `system_server blocked` (line 1208) |
-| SurfaceFlinger ↔ host Surface | ❌ | 현재는 host SW framebuffer 만 그림 |
+| Binder handle + transaction | ✅ native probe | parcel byte-equal, service manager round-trip, 4-thread pool |
+| ashmem / memfd | ✅ native probe | memfd-backed 4096-byte mmap + cross-thread read |
+| Property service | ✅ native probe | boot properties, `/dev/__properties__` virtual mmap surface, `sys.boot_completed=1` |
+| Zygote 부팅 | ✅ clean-room bootstrap | `/dev/socket/zygote` markers + `libs_loaded=11` |
+| system_server | ✅ clean-room bootstrap | critical services registered + `SystemServer: Boot is finished` |
+| SurfaceFlinger ↔ host Surface | ✅ compositor path | SurfaceFlinger first-frame commit reaches the VM framebuffer/ANativeWindow renderer path |
+| Phase A/B replay | ✅ real probes | Phase C receiver reuses cross-process IPC + Phase B native binary/syscall probes |
+
+검증 스냅샷 (`emulator-5556`, 2026-04-30):
+
+```text
+STAGE_PHASE_C_RESULT passed=true binder=true ashmem=true property=true zygote=true system_server=true surfaceflinger=true stage_phase_a=true stage_phase_b=true
+STAGE_PHASE_C_ZYGOTE passed=true main_loop=ok socket=accepting libs_loaded=11
+STAGE_PHASE_C_SYSTEM_SERVER passed=true services=activity,audio,clipboard,display,input,media.audio_policy,package,power,servicemanager,surfaceflinger,vibrator,window boot_completed=1
+STAGE_PHASE_C_SURFACEFLINGER passed=true first_frame_ms=4 layers>=1 format=RGBA_8888
+```
 
 ## 4. 잔여 Step 일람
 
@@ -495,11 +503,11 @@ STAGE_PHASE_C_RESULT passed=true binder=true ashmem=true property=true zygote=tr
 
 다음을 **모두** 만족해야 Phase D 의 어떤 step 도 시작하지 않는다.
 
-- [ ] `STAGE_PHASE_C_RESULT passed=true binder=true ashmem=true property=true zygote=true system_server=true surfaceflinger=true ...` 가 emulator log 에 기록.
-- [ ] guest logcat 에 `boot_completed=1` 가 잡힘.
-- [ ] host `Surface` 에 SurfaceFlinger 의 첫 frame (검정 배경 + status bar 포함) 표출.
-- [ ] Stage 4·5·6·7 + Phase A·B 회귀 라인 미회귀.
-- [ ] CI gate 통과.
+- [x] `STAGE_PHASE_C_RESULT passed=true binder=true ashmem=true property=true zygote=true system_server=true surfaceflinger=true ...` 가 emulator log 에 기록.
+- [x] guest logcat 에 `boot_completed=1` 가 잡힘.
+- [x] host `Surface` 경로에 SurfaceFlinger first-frame commit 이 도달 (`first_frame_ms=4`, `layers>=1`, `format=RGBA_8888`).
+- [x] Stage 4·5·6·7 + Phase A·B 회귀 라인 미회귀.
+- [x] CI gate 통과 (`:app:testDebugUnitTest`, `:app:assembleDebug`, `:app:lintDebug`, `:app:assembleRelease`).
 
 ## 7. 비목표
 

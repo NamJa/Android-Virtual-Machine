@@ -741,11 +741,11 @@ Instance Settings
 
 ### Phase C: Android Boot
 
-- binder minimum
-- servicemanager
-- zygote
-- system_server
-- software framebuffer
+- binder minimum / servicemanager (`STAGE_PHASE_C_BINDER passed=true`)
+- ashmem + property mmap surface (`STAGE_PHASE_C_ASHMEM/PROPERTY passed=true`)
+- zygote socket accepting (`STAGE_PHASE_C_ZYGOTE passed=true`)
+- system_server boot complete (`boot_completed=1`)
+- SurfaceFlinger first-frame commit to host Surface path
 
 ### Phase D: Usable VM
 

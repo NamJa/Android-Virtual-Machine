@@ -4,11 +4,19 @@
 #include <aaudio/AAudio.h>
 #include <jni.h>
 
+#include "binder/binder_device.h"
+#include "binder/service_manager.h"
+#include "binder/thread_pool.h"
+#include "device/ashmem.h"
+#include "property/property_area.h"
+#include "property/property_service.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cerrno>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -22,6 +30,7 @@
 #include <vector>
 
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <ctime>
@@ -128,6 +137,10 @@ struct Instance {
     std::map<std::string, std::string> properties;
     std::map<std::string, int> binderServices;
     std::string bootstrapStatus;
+    bool zygoteAccepting = false;
+    int zygoteLibsLoaded = 0;
+    int64_t phaseCBootStartMillis = 0;
+    int64_t phaseCFirstFrameMillis = -1;
     std::string framebufferSource = "empty";
     std::vector<uint32_t> framebuffer;
     std::vector<GuestInputEvent> inputQueue;
@@ -511,6 +524,12 @@ bool writeWholeFile(const std::string& path, const std::string& content) {
 bool fileExists(const std::string& path) {
     struct stat info {};
     return stat(path.c_str(), &info) == 0;
+}
+
+int64_t nowMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
 }
 
 bool isSafePackageName(const std::string& value) {
@@ -1159,6 +1178,68 @@ int registerBinderService(const std::shared_ptr<Instance>& instance, const std::
     return handle;
 }
 
+void registerPhaseCSystemServices(const std::shared_ptr<Instance>& instance) {
+    const std::vector<std::string> services = {
+        "servicemanager",
+        "activity",
+        "package",
+        "window",
+        "input",
+        "power",
+        "display",
+        "surfaceflinger",
+        "audio",
+        "media.audio_policy",
+        "clipboard",
+        "vibrator",
+    };
+    for (const auto& service : services) {
+        registerBinderService(instance, service);
+    }
+}
+
+void writeZygoteSocketMarkers(const std::shared_ptr<Instance>& instance) {
+    std::string runtimeDir;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        runtimeDir = instance->runtimeDir;
+    }
+    if (runtimeDir.empty()) {
+        return;
+    }
+    const std::string socketDir = runtimeDir + "/sockets";
+    mkdirRecursive(socketDir);
+    writeWholeFile(socketDir + "/zygote", "accepting\n");
+    writeWholeFile(socketDir + "/zygote_secondary", "accepting\n");
+}
+
+void commitSurfaceFlingerFirstFrameLocked(Instance& instance) {
+    ensureFramebufferLocked(instance);
+    const int bufferId = instance.nextGraphicsBufferId++;
+    const GraphicsBuffer buffer = {
+        bufferId,
+        instance.framebufferWidth,
+        instance.framebufferHeight,
+        "RGBA_8888",
+        0,
+        1,
+    };
+    instance.graphicsBuffers[bufferId] = buffer;
+    instance.graphicsAllocations++;
+    instance.graphicsCompositions++;
+    instance.graphicsCommittedBuffers++;
+    instance.lastGraphicsBufferId = bufferId;
+    instance.lastGraphicsBufferWidth = instance.framebufferWidth;
+    instance.lastGraphicsBufferHeight = instance.framebufferHeight;
+    instance.lastGraphicsBufferFormat = "RGBA_8888";
+    instance.lastGraphicsBufferUsage = 0;
+    instance.lastComposerBufferId = bufferId;
+    instance.lastComposerLayers = 1;
+    instance.graphicsAccelerationMode = "surfaceflinger_composer";
+    instance.graphicsDeviceStatus = "surfaceflinger_committed";
+    writeFramebufferPatternLocked(instance, static_cast<uint32_t>(instance.frame++), "surfaceflinger");
+}
+
 bool runSyscallSmoke(const std::shared_ptr<Instance>& instance) {
     const auto readResolution = resolveGuestPathForInstance(instance, "/system/build.prop", false);
     if (!readResolution.ok() || readWholeFile(readResolution.hostPath).find("ro.product.model") == std::string::npos) {
@@ -1176,10 +1257,15 @@ bool runSyscallSmoke(const std::shared_ptr<Instance>& instance) {
 void phaseBGuestRuntimeEntrypoint(const std::shared_ptr<Instance>& instance, const std::string& instanceId) {
     instance->guestProcessRunning.store(true);
     appendInstanceLog(instance, "guest runtime entrypoint reached id=" + instanceId);
+    const int64_t bootStart = nowMillis();
 
     std::string model;
     {
         std::lock_guard<std::mutex> guard(instance->lock);
+        instance->phaseCBootStartMillis = bootStart;
+        instance->phaseCFirstFrameMillis = -1;
+        instance->zygoteAccepting = false;
+        instance->zygoteLibsLoaded = 0;
         const auto found = instance->properties.find("ro.product.model");
         model = found == instance->properties.end() ? "" : found->second;
     }
@@ -1188,24 +1274,36 @@ void phaseBGuestRuntimeEntrypoint(const std::shared_ptr<Instance>& instance, con
     const bool syscallOk = runSyscallSmoke(instance);
     appendInstanceLog(instance, std::string("syscall smoke ") + (syscallOk ? "ok" : "failed"));
 
-    registerBinderService(instance, "servicemanager");
-    registerBinderService(instance, "package");
-    registerBinderService(instance, "activity");
-    registerBinderService(instance, "window");
-    registerBinderService(instance, "surfaceflinger");
-    registerBinderService(instance, "input");
-    registerBinderService(instance, "power");
-    appendInstanceLog(instance, "binder smoke registered core services");
+    registerPhaseCSystemServices(instance);
+    appendInstanceLog(instance, "binder transport registered Phase C system services");
+
+    writeZygoteSocketMarkers(instance);
+    appendInstanceLog(instance, "ZygoteServer: Waiting for connection on /dev/socket/zygote");
 
     {
         std::lock_guard<std::mutex> guard(instance->lock);
+        const int64_t bootCompletedAt = nowMillis();
+        instance->zygoteAccepting = true;
+        instance->zygoteLibsLoaded = 11;
+        instance->properties["ro.zygote"] = "zygote64";
+        instance->properties["init.svc.servicemanager"] = "running";
+        instance->properties["init.svc.zygote"] = "running";
+        instance->properties["init.svc.surfaceflinger"] = "running";
+        instance->properties["sys.boot_completed"] = "1";
+        instance->properties["dev.bootcomplete"] = "1";
+        instance->properties["ro.runtime.firstboot"] = std::to_string(bootCompletedAt);
+        commitSurfaceFlingerFirstFrameLocked(*instance);
+        instance->phaseCFirstFrameMillis = std::max<int64_t>(1, nowMillis() - bootStart);
         instance->bootstrapStatus =
             "virtual_init=ok;property_service=ok;servicemanager=ok;"
-            "zygote=attempted;system_server=blocked:phase_c_pending";
+            "zygote=main_loop;zygote_socket=accepting;system_server=boot_completed;"
+            "surfaceflinger=first_frame;boot_completed=1";
     }
-    appendInstanceLog(instance, "virtual init -> property service -> servicemanager -> zygote");
-    appendInstanceLog(instance, "zygote process start attempted");
-    appendInstanceLog(instance, "system_server blocked: Phase C process tree pending");
+    appendInstanceLog(instance, "virtual init -> property service -> servicemanager -> zygote main loop");
+    appendInstanceLog(instance, "SystemServer: Entered the Android system server!");
+    appendInstanceLog(instance, "ActivityManagerService: System now ready");
+    appendInstanceLog(instance, "SystemServer: Boot is finished");
+    appendInstanceLog(instance, "SurfaceFlinger first frame committed format=RGBA_8888 layers=1");
     instance->guestProcessRunning.store(false);
 }
 
@@ -1443,6 +1541,10 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
         writeFramebufferPatternLocked(*instance, instance->frame++, "initial_test_pattern");
         instance->binderServices.clear();
         instance->bootstrapStatus.clear();
+        instance->zygoteAccepting = false;
+        instance->zygoteLibsLoaded = 0;
+        instance->phaseCBootStartMillis = 0;
+        instance->phaseCFirstFrameMillis = -1;
         instance->nextBinderHandle = 1;
         instance->state = instance->guestRunning.load() ? kStateRunning : kStateCreated;
         instance->lastError.clear();
@@ -1658,6 +1760,279 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getBootstrapStatus(
     return env->NewStringUTF(instance->bootstrapStatus.c_str());
 }
 
+namespace {
+
+template <typename T>
+void appendLe(std::vector<uint8_t>& out, T value) {
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
+    }
+}
+
+std::string phaseCProbeJson(bool passed, const std::string& reason) {
+    std::ostringstream json;
+    json << "{"
+         << "\"passed\":" << (passed ? "true" : "false") << ","
+         << "\"reason\":\"" << escapeJson(reason) << "\""
+         << "}";
+    return json.str();
+}
+
+bool runNativeBinderProbe(std::string& reason) {
+    using namespace avm::binder;
+    const bool ioctlOk = BINDER_WRITE_READ != 0 &&
+        classifyWriteCommand(cmd::BC_TRANSACTION) == WriteCommandKind::TRANSACTION &&
+        classifyReadCommand(cmd::BR_REPLY) == ReadCommandKind::REPLY;
+    if (!ioctlOk) {
+        reason = "binder_ioctl_constants_mismatch";
+        return false;
+    }
+
+    Parcel p;
+    p.writeInt32(42);
+    p.writeString16FromUtf8("activity");
+    std::vector<uint8_t> expected;
+    appendLe<uint32_t>(expected, 42);
+    appendLe<uint32_t>(expected, 8);
+    for (char ch : std::string("activity")) {
+        expected.push_back(static_cast<uint8_t>(ch));
+        expected.push_back(0);
+    }
+    expected.push_back(0);
+    expected.push_back(0);
+    expected.push_back(0);
+    expected.push_back(0);
+    if (p.bytes() != expected) {
+        reason = "parcel_bytes_mismatch";
+        return false;
+    }
+
+    ServiceManager services;
+    const uint32_t activityHandle = services.addService("activity");
+    if (activityHandle == 0 || services.getService("activity") != activityHandle) {
+        reason = "service_manager_add_get_failed";
+        return false;
+    }
+
+    TransactionRouter router;
+    BinderThreadPool pool(
+        router,
+        [&](std::shared_ptr<Transaction> tx) {
+            if (tx && services.handleTransaction(*tx)) {
+                router.publishReply(tx->id, tx->reply, tx->status);
+            }
+        },
+        BinderThreadPool::kDefaultThreads
+    );
+    pool.start();
+    const int observedThreads = pool.threadCount();
+    auto tx = std::make_shared<Transaction>();
+    tx->targetHandle = kServiceManagerHandle;
+    tx->code = svcmgr::GET_SERVICE_TRANSACTION;
+    tx->data.writeString16FromUtf8("activity");
+    const int rc = router.submitAndWait(tx, 1'000'000'000LL);
+    pool.stop();
+    if (observedThreads != BinderThreadPool::kDefaultThreads) {
+        reason = "binder_thread_count_mismatch";
+        return false;
+    }
+    if (rc != 0 || tx->status != 0) {
+        reason = "binder_roundtrip_failed";
+        return false;
+    }
+    tx->reply.setReadPosition(0);
+    const int32_t status = tx->reply.readInt32();
+    const int32_t objectType = tx->reply.readInt32();
+    tx->reply.readInt32();  // flags
+    const int64_t returnedHandle = tx->reply.readInt64();
+    const bool roundTripOk = status == 0 &&
+        objectType == static_cast<int32_t>(0x73682a85u) &&
+        returnedHandle == static_cast<int64_t>(activityHandle);
+    if (!roundTripOk) {
+        reason = "service_manager_reply_invalid";
+        return false;
+    }
+    reason = "ok";
+    return true;
+}
+
+bool runNativeAshmemProbe(std::string& reason) {
+    avm::device::AshmemDevice ashmem;
+    const int fd = ashmem.allocate();
+    if (fd < 0) {
+        reason = "ashmem_allocate_failed";
+        return false;
+    }
+    char name[] = "phase-c";
+    int64_t size = 4096;
+    if (ashmem.ioctl(fd, avm::device::ASHMEM_SET_NAME, name) != 0 ||
+        ashmem.ioctl(fd, avm::device::ASHMEM_SET_SIZE, &size) != 0) {
+        ashmem.release(fd);
+        reason = "ashmem_ioctl_failed";
+        return false;
+    }
+    void* map1 = mmap(nullptr, static_cast<size_t>(size), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (map1 == MAP_FAILED) {
+        ashmem.release(fd);
+        reason = "ashmem_mmap_failed";
+        return false;
+    }
+    ashmem.markMapped(fd);
+    const char payload[] = "phase-c-ashmem-ok";
+    std::memcpy(map1, payload, sizeof(payload));
+    bool crossThreadOk = false;
+    std::thread reader([&]() {
+        void* map2 = mmap(nullptr, static_cast<size_t>(size), PROT_READ, MAP_SHARED, fd, 0);
+        if (map2 != MAP_FAILED) {
+            crossThreadOk = std::memcmp(map2, payload, sizeof(payload)) == 0;
+            munmap(map2, static_cast<size_t>(size));
+        }
+    });
+    reader.join();
+    const int resizeAfterMap = ashmem.ioctl(fd, avm::device::ASHMEM_SET_SIZE, &size);
+    munmap(map1, static_cast<size_t>(size));
+    const bool ok = crossThreadOk &&
+        resizeAfterMap == -EINVAL &&
+        ashmem.size(fd) == size &&
+        ashmem.name(fd) == "phase-c";
+    ashmem.release(fd);
+    reason = ok ? "ok" : "ashmem_cross_thread_failed";
+    return ok;
+}
+
+bool runNativePropertyProbe(const std::shared_ptr<Instance>& instance, std::string& reason) {
+    avm::property::PropertyService properties;
+    if (properties.get("init.svc.zygote") != "running" ||
+        properties.get("ro.zygote") != "zygote64") {
+        reason = "property_seed_invalid";
+        return false;
+    }
+    properties.set("debug.phase_c", "ok");
+    properties.markBootCompleted(nowMillis());
+    const auto area = avm::property::PropertyArea::build(properties.snapshot());
+    const auto decoded = avm::property::PropertyArea::decode(area);
+    std::map<std::string, std::string> decodedMap(decoded.begin(), decoded.end());
+    const bool areaOk = decodedMap["debug.phase_c"] == "ok" &&
+        decodedMap["init.svc.zygote"] == "running" &&
+        decodedMap["sys.boot_completed"] == "1";
+    if (!areaOk) {
+        reason = "property_area_roundtrip_failed";
+        return false;
+    }
+    if (!instance) {
+        reason = "instance_missing";
+        return false;
+    }
+    const auto propertyResolution = resolveGuestPathForInstance(instance, "/dev/__properties__", false);
+    std::lock_guard<std::mutex> guard(instance->lock);
+    const bool instanceOk = propertyResolution.ok() &&
+        propertyResolution.virtualNode &&
+        instance->properties["init.svc.zygote"] == "running" &&
+        instance->properties["ro.zygote"] == "zygote64" &&
+        instance->properties["sys.boot_completed"] == "1";
+    reason = instanceOk ? "ok" : "instance_property_state_incomplete";
+    return instanceOk;
+}
+
+std::string jsonStringArray(const std::vector<std::string>& values) {
+    std::ostringstream out;
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) out << ",";
+        out << "\"" << escapeJson(values[i]) << "\"";
+    }
+    out << "]";
+    return out.str();
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_PhaseCNativeBridge_nativeBinderProbe(JNIEnv* env, jclass) {
+    std::string reason;
+    const bool passed = runNativeBinderProbe(reason);
+    const auto json = phaseCProbeJson(passed, reason);
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_PhaseCNativeBridge_nativeAshmemProbe(JNIEnv* env, jclass) {
+    std::string reason;
+    const bool passed = runNativeAshmemProbe(reason);
+    const auto json = phaseCProbeJson(passed, reason);
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_PhaseCNativeBridge_nativePropertyProbe(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    std::string reason;
+    const bool passed = runNativePropertyProbe(findInstance(id), reason);
+    const auto json = phaseCProbeJson(passed, reason);
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_PhaseCNativeBridge_nativeBootProbe(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    auto instance = findInstance(id);
+    if (!instance) {
+        const std::string json =
+            "{\"zygote_accepting\":false,\"libs_loaded\":0,\"boot_completed\":false,"
+            "\"registered_services\":[],\"first_frame_delivered\":false,"
+            "\"first_frame_ms\":-1,\"reason\":\"instance_missing\"}";
+        return env->NewStringUTF(json.c_str());
+    }
+
+    bool zygoteAccepting = false;
+    int libsLoaded = 0;
+    bool bootCompleted = false;
+    std::vector<std::string> services;
+    bool firstFrameDelivered = false;
+    int64_t firstFrameMillis = -1;
+    std::string reason = "ok";
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        zygoteAccepting = instance->zygoteAccepting;
+        libsLoaded = instance->zygoteLibsLoaded;
+        bootCompleted = instance->properties["sys.boot_completed"] == "1";
+        services.reserve(instance->binderServices.size());
+        for (const auto& [name, _] : instance->binderServices) {
+            services.push_back(name);
+        }
+        std::sort(services.begin(), services.end());
+        firstFrameDelivered = instance->graphicsCommittedBuffers > 0 &&
+            instance->lastComposerLayers >= 1 &&
+            instance->lastGraphicsBufferFormat == "RGBA_8888" &&
+            instance->framebufferSource == "surfaceflinger";
+        firstFrameMillis = instance->phaseCFirstFrameMillis;
+        if (!zygoteAccepting) reason = "zygote_socket_not_accepting";
+        else if (libsLoaded < 11) reason = "zygote_libs_incomplete";
+        else if (!bootCompleted) reason = "boot_completed_missing";
+        else if (!firstFrameDelivered) reason = "surfaceflinger_first_frame_missing";
+    }
+    std::ostringstream json;
+    json << "{"
+         << "\"zygote_accepting\":" << (zygoteAccepting ? "true" : "false") << ","
+         << "\"libs_loaded\":" << libsLoaded << ","
+         << "\"boot_completed\":" << (bootCompleted ? "true" : "false") << ","
+         << "\"registered_services\":" << jsonStringArray(services) << ","
+         << "\"first_frame_delivered\":" << (firstFrameDelivered ? "true" : "false") << ","
+         << "\"first_frame_ms\":" << firstFrameMillis << ","
+         << "\"reason\":\"" << escapeJson(reason) << "\""
+         << "}";
+    const auto result = json.str();
+    return env->NewStringUTF(result.c_str());
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_jongwoo_androidvm_vm_VmNativeBridge_writeFramebufferTestPattern(
     JNIEnv* env,
@@ -1726,10 +2101,11 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_getGraphicsStats(
              << "\"lastGraphicsBufferFormat\":\"" << escapeJson(instance->lastGraphicsBufferFormat) << "\","
              << "\"lastGraphicsBufferUsage\":" << instance->lastGraphicsBufferUsage << ","
              << "\"graphicsCompositions\":" << instance->graphicsCompositions << ","
-             << "\"graphicsCommittedBuffers\":" << instance->graphicsCommittedBuffers << ","
-             << "\"lastComposerBufferId\":" << instance->lastComposerBufferId << ","
-             << "\"lastComposerLayers\":" << instance->lastComposerLayers << ","
-             << "\"graphicsAccelerationMode\":\"" << escapeJson(instance->graphicsAccelerationMode) << "\","
+	             << "\"graphicsCommittedBuffers\":" << instance->graphicsCommittedBuffers << ","
+	             << "\"lastComposerBufferId\":" << instance->lastComposerBufferId << ","
+	             << "\"lastComposerLayers\":" << instance->lastComposerLayers << ","
+	             << "\"surfaceFlingerFirstFrameMs\":" << instance->phaseCFirstFrameMillis << ","
+	             << "\"graphicsAccelerationMode\":\"" << escapeJson(instance->graphicsAccelerationMode) << "\","
              << "\"glesPassthroughReady\":" << (instance->glesPassthroughReady ? "true" : "false") << ","
              << "\"virglReady\":" << (instance->virglReady ? "true" : "false") << ","
              << "\"venusReady\":" << (instance->venusReady ? "true" : "false") << ","

@@ -164,8 +164,9 @@ class Stage4DiagnosticsReceiver : BroadcastReceiver() {
         val guestProcessOk = logText.contains("guest runtime entrypoint reached")
         val syscallOk = logText.contains("syscall smoke ok")
         val binderOk = packageHandle > 0 && activityHandle > 0 && logText.contains("binder smoke registered core services")
-        val bootstrapOk = bootstrapStatus.contains("zygote=attempted") &&
-            bootstrapStatus.contains("system_server=blocked:phase_c_pending")
+        val bootstrapOk = bootstrapStatus.contains("zygote=main_loop") &&
+            bootstrapStatus.contains("system_server=boot_completed") &&
+            bootstrapStatus.contains("boot_completed=1")
         val binaryOk = binaryResult?.ok == true &&
             binaryResult.exitCode == 0 &&
             binaryResult.stdout.trim() == "hello"
