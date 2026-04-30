@@ -17,7 +17,7 @@ import android.os.Messenger
 import android.os.RemoteException
 import dev.jongwoo.androidvm.R
 
-class VmInstanceService : Service() {
+open class VmInstanceService : Service() {
     private var state: VmState = VmState.STOPPED
     private var activeInstanceId: String = VmConfig.DEFAULT_INSTANCE_ID
     private val replyMessengers = mutableSetOf<Messenger>()
@@ -231,22 +231,30 @@ class VmInstanceService : Service() {
         private const val EXTRA_PACKAGE_NAME = "extra.packageName"
         private const val EXTRA_STAGED_PATH = "extra.stagedPath"
 
+        internal fun serviceClassFor(instanceId: String): Class<out VmInstanceService> = when (VmProcessSlots.processSlotFor(instanceId)) {
+            ":vm1" -> VmInstanceService::class.java
+            ":vm2" -> VmInstanceService2::class.java
+            ":vm3" -> VmInstanceService3::class.java
+            ":vm4" -> VmInstanceService4::class.java
+            else -> VmInstanceService::class.java
+        }
+
         fun start(context: Context, instanceId: String = VmConfig.DEFAULT_INSTANCE_ID) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
             context.startForegroundService(intent)
         }
 
         fun stop(context: Context, instanceId: String = VmConfig.DEFAULT_INSTANCE_ID) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_STOP)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
             context.startService(intent)
         }
 
         fun importApk(context: Context, instanceId: String, stagedPath: String) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_IMPORT_APK)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
                 .putExtra(EXTRA_STAGED_PATH, stagedPath)
@@ -254,7 +262,7 @@ class VmInstanceService : Service() {
         }
 
         fun launchPackage(context: Context, instanceId: String, packageName: String) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_LAUNCH_PACKAGE)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)
@@ -262,7 +270,7 @@ class VmInstanceService : Service() {
         }
 
         fun stopPackage(context: Context, instanceId: String, packageName: String) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_STOP_PACKAGE)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)
@@ -270,7 +278,7 @@ class VmInstanceService : Service() {
         }
 
         fun uninstallPackage(context: Context, instanceId: String, packageName: String) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_UNINSTALL_PACKAGE)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)
@@ -278,7 +286,7 @@ class VmInstanceService : Service() {
         }
 
         fun clearPackageData(context: Context, instanceId: String, packageName: String) {
-            val intent = Intent(context, VmInstanceService::class.java)
+            val intent = Intent(context, serviceClassFor(instanceId))
                 .setAction(ACTION_CLEAR_DATA)
                 .putExtra(EXTRA_INSTANCE_ID, instanceId)
                 .putExtra(EXTRA_PACKAGE_NAME, packageName)

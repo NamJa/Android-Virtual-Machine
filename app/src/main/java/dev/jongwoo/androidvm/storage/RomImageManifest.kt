@@ -12,12 +12,35 @@ data class RomImageManifest(
     val sha256: String,
     val createdAt: String,
     val minHostSdk: Int,
+    /** Phase E.9: monotonically increasing patch level. Higher = newer. */
+    val patchLevel: Int = 0,
+    /** Phase E.9: detached signature over the canonical manifest body, hex-encoded. */
+    val signature: String? = null,
+    /** Phase E.9: public-key identifier (e.g. fingerprint suffix) used for signature verification. */
+    val publicKeyId: String? = null,
 ) {
     val archiveFileName: String
         get() = "$name.$format"
 
     val checksumFileName: String
         get() = "$name.sha256"
+
+    /**
+     * Canonical bytes used for signature computation. Must NOT include the signature/publicKeyId
+     * fields — those wrap the canonical body.
+     */
+    fun canonicalSigningBody(): String = JSONObject()
+        .put("name", name)
+        .put("guestVersion", guestVersion)
+        .put("guestArch", guestArch)
+        .put("format", format)
+        .put("compressedSize", compressedSize)
+        .put("uncompressedSize", uncompressedSize)
+        .put("sha256", sha256)
+        .put("createdAt", createdAt)
+        .put("minHostSdk", minHostSdk)
+        .put("patchLevel", patchLevel)
+        .toString()
 
     fun toJson(): String = JSONObject()
         .put("name", name)
@@ -29,6 +52,9 @@ data class RomImageManifest(
         .put("sha256", sha256)
         .put("createdAt", createdAt)
         .put("minHostSdk", minHostSdk)
+        .put("patchLevel", patchLevel)
+        .put("signature", signature ?: JSONObject.NULL)
+        .put("publicKeyId", publicKeyId ?: JSONObject.NULL)
         .toString(2)
 
     companion object {
@@ -44,6 +70,13 @@ data class RomImageManifest(
                 sha256 = obj.optString("sha256"),
                 createdAt = obj.optString("createdAt"),
                 minHostSdk = obj.optInt("minHostSdk", 26),
+                patchLevel = obj.optInt("patchLevel", 0),
+                signature = obj.optString("signature").takeIf {
+                    it.isNotBlank() && !obj.isNull("signature")
+                },
+                publicKeyId = obj.optString("publicKeyId").takeIf {
+                    it.isNotBlank() && !obj.isNull("publicKeyId")
+                },
             )
         }
     }

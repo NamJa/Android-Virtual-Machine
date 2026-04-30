@@ -105,8 +105,8 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 | A | ✅ 종료 게이트 통과 (`STAGE_PHASE_A_RESULT passed=true`) |
 | B | ✅ 종료 게이트 통과 (`STAGE_PHASE_B_RESULT passed=true`) |
 | C | ✅ 종료 게이트 통과 (`STAGE_PHASE_C_RESULT passed=true`, emulator-5556 / 2026-04-30) |
-| D | 0% (모든 step 미시작) |
-| E | 0% (모든 step 미시작) |
+| D | ✅ 종료 게이트 통과 (`STAGE_PHASE_D_RESULT passed=true`, emulator-5556 / 2026-04-30) |
+| E | ✅ 종료 게이트 통과 (`STAGE_PHASE_E_RESULT passed=true`, emulator-5556 / 2026-04-30) |
 
 자세한 현황은 `docs/planning/post-stage7-roadmap.md` "현재 완료 상태 요약" 표 참고.
 
@@ -127,11 +127,11 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 |---|---|
 | ~~`vm_native_bridge.cpp:1208` `system_server blocked: ELF loader is not implemented yet`~~ | ✅ B.2/B.3 resolved |
 | ~~`vm_native_bridge.cpp:1204` `zygote=attempted`~~ | ✅ C.4 resolved (`zygote=main_loop;zygote_socket=accepting`) |
-| `vm_native_bridge.cpp` `graphicsAccelerationMode = "surfaceflinger_composer"` 이후 GLES/Virgl/Venus 미구현 | E.5 / E.6 / E.7 |
-| `bridge/UnsupportedMediaBridge.kt` `${bridge}_unsupported_stage7_mvp` | D.5 (Camera) / D.6 (Microphone) |
-| `bridge/NetworkBridge.kt` enable/disable only | D.4 (host NAT) / D.7 (VPN isolation) |
-| `bridge/LegacyBridgeKind.kt` 전체 파일 | A.2 (multi-instance ready) 직후 삭제 |
-| `vm/VmManagerService.kt` 단순 state holder | A.1 |
+| `vm_native_bridge.cpp` `graphicsAccelerationMode = "surfaceflinger_composer"` 이후 GLES/Virgl/Venus 미구현 | ✅ E.5/E.6/E.7 gate resolved via supported-host probe or explicit graceful degradation |
+| ~~`bridge/UnsupportedMediaBridge.kt` `${bridge}_unsupported_stage7_mvp`~~ | ✅ D.5/D.6 resolved |
+| ~~`bridge/NetworkBridge.kt` enable/disable only~~ | ✅ D.4/D.7 resolved |
+| ~~`bridge/LegacyBridgeKind.kt` 전체 파일~~ | ✅ A.2 resolved |
+| ~~`vm/VmManagerService.kt` 단순 state holder~~ | ✅ A.1 resolved |
 
 ## 7. 참고
 

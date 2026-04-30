@@ -60,6 +60,7 @@ import dev.jongwoo.androidvm.vm.StagePhaseBResultLine
 import dev.jongwoo.androidvm.vm.StagePhaseCDiagnostics
 import dev.jongwoo.androidvm.vm.StagePhaseCResultLine
 import dev.jongwoo.androidvm.vm.StagePhaseDDiagnostics
+import dev.jongwoo.androidvm.vm.StagePhaseDResultLine
 import dev.jongwoo.androidvm.vm.VmNativeBridge
 import dev.jongwoo.androidvm.bridge.Stage7Diagnostics
 import dev.jongwoo.androidvm.bridge.Stage7RegressionResult
@@ -94,7 +95,7 @@ class StagePhaseDDiagnosticsReceiver : BroadcastReceiver() {
         }.start()
     }
 
-    private fun runDiagnostics(context: Context) {
+    internal fun runDiagnostics(context: Context): StagePhaseDResultLine {
         val workspace = File(context.filesDir, "avm/diagnostics/phase-d").also { it.mkdirs() }
         val phaseAWorkspace = File(workspace, "phase-a").also { it.mkdirs() }
         val phaseDWorkspace = File(workspace, "phase-d").also { it.mkdirs() }
@@ -148,7 +149,7 @@ class StagePhaseDDiagnosticsReceiver : BroadcastReceiver() {
         Log.i(TAG, perf.formatLine())
         val opsOk = phaseDOpsProbe(instancePaths, launchProbe.launcherReachedMillis, perf)
 
-        StagePhaseDDiagnostics(
+        val result = StagePhaseDDiagnostics(
             pmsDetail = "install=ok pms_listed=true package=${packageProbe.packageName}",
             appRunDetail = "package=${packageProbe.packageName} activity_oncreate=true frame_count>=1 crash_count=0",
             pmsProbe = { packageProbe.passed },
@@ -167,6 +168,7 @@ class StagePhaseDDiagnosticsReceiver : BroadcastReceiver() {
         ).run()
         File(phaseDWorkspace, ".kept").writeText("")
         packageProbe.cleanup()
+        return result
     }
 
     private fun phaseCResult(

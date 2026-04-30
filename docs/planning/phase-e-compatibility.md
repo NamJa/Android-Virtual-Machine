@@ -26,14 +26,14 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 
 | 영역 | 상태 | 참고 |
 |---|---|---|
-| Multi-instance 동시 실행 | ❌ | manifest 가 `:vm1` 만 선언 |
-| Snapshot / overlay | ❌ | `<instance>/snapshots/` 디렉토리만 plan 에 정의 |
-| Android 10 호환 | ❌ | binderfs / memfd / scoped storage 미적용 |
-| Android 12 호환 | ❌ | seccomp 강화 / RRO 미적용 |
-| GLES passthrough | ❌ | `glesPassthroughReady=false` flag 만 |
-| Virglrenderer | ❌ | `virglReady=false` flag 만 |
-| Venus / Vulkan | ❌ | `venusReady=false` flag 만 |
-| 32-bit / x86 translation | ❌ | 별도 대형 프로젝트 후보 |
+| Multi-instance 동시 실행 | ✅ | `:vm1`~`:vm4` 정적 slot 선언 + helper routing + Phase E receiver 동시 runtime probe |
+| Snapshot / overlay | ✅ | `rootfs.base` + `rootfs.overlay` + snapshot CRUD + CoW/whiteout 진단 |
+| Android 10 호환 | ✅ | API 29 profile boot + PMS/launcher smoke gate |
+| Android 12 호환 | ✅ | API 31 profile boot + PMS/launcher smoke gate |
+| GLES passthrough | ✅ | supported host 는 frame gate, unsupported host 는 `skipped=true reason=...` graceful degradation |
+| Virglrenderer | ✅ | supported host 는 command/gl gate, unsupported host 는 `skipped=true reason=...` graceful degradation |
+| Venus / Vulkan | ✅ | supported host 는 Vulkan gate, unsupported host 는 `skipped=true reason=...` graceful degradation |
+| 32-bit / x86 translation | ✅ | optional disabled build 는 `translation=skipped reason=optional_disabled` |
 
 ## 4. 잔여 Step 일람
 
@@ -564,15 +564,15 @@ STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=tru
 
 다음을 **모두** 만족하면 long-term roadmap 의 모든 Phase 완료.
 
-- [ ] `STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=(true|skipped) security_update=true ...` 가 emulator log 에 기록.
-- [ ] 동시 N 인스턴스 (≥ 2) 에서 다른 Android 버전 (7.1.2 / 10 / 12 / 임의 조합) 부팅 가능.
-- [ ] Snapshot 만들기 → 사용자 작업 → rollback 정상.
-- [ ] E.5 / E.6 / E.7 각각의 gate 가 지원 가능한 검증 host 에서 통과하고, 미지원 host 에서는 graceful degradation 상태가 명확히 표시됨.
-- [ ] ROM signed manifest 검증이 동작하고, 위조 manifest 가 거부됨 (E.9 보안 업데이트).
-- [ ] (옵션) translation 기능을 켠 빌드에서는 32-bit / x86 guest binary 한 개가 실행. 기능을 끈 빌드는 `translation=skipped` 를 명시.
-- [ ] (옵션) GMS compatibility profile 은 core gate 밖에서만 검증하며, host APK 는 proprietary GMS package 를 번들링하지 않음.
-- [ ] Phase A ~ D 회귀 라인 모두 미회귀.
-- [ ] CI gate 통과.
+- [x] `STAGE_PHASE_E_RESULT passed=true multi_instance=true snapshot=true android10=true android12=true gles=true virgl=true venus=true translation=(true|skipped) security_update=true ...` 가 emulator log 에 기록.
+- [x] 동시 N 인스턴스 (≥ 2) 에서 다른 Android 버전 (7.1.2 / 10 / 12 / 임의 조합) 부팅 가능.
+- [x] Snapshot 만들기 → 사용자 작업 → rollback 정상.
+- [x] E.5 / E.6 / E.7 각각의 gate 가 지원 가능한 검증 host 에서 통과하고, 미지원 host 에서는 graceful degradation 상태가 명확히 표시됨.
+- [x] ROM signed manifest 검증이 동작하고, 위조 manifest 가 거부됨 (E.9 보안 업데이트).
+- [x] (옵션) translation 기능을 켠 빌드에서는 32-bit / x86 guest binary 한 개가 실행. 기능을 끈 빌드는 `translation=skipped` 를 명시.
+- [x] (옵션) GMS compatibility profile 은 core gate 밖에서만 검증하며, host APK 는 proprietary GMS package 를 번들링하지 않음.
+- [x] Phase A ~ D 회귀 라인 모두 미회귀.
+- [x] CI gate 통과.
 
 ## 7. 비목표
 

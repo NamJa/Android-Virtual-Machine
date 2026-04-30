@@ -17,10 +17,10 @@
 ### 장기 로드맵 (Phase A~E) 관점에서의 위치
 
 - **Phase A — Host Shell**: 완료.
-- **Phase B — Guest Runtime PoC**: 부분 완료. rootfs 추출/VFS/property/logging 은 동작하지만 *guest process loader* 는 stub 단계.
-- **Phase C — Android Boot**: 미시작. binder는 handle 발급 stub이고 zygote/system_server 부팅은 차단된 상태.
-- **Phase D — Usable VM**: 시뮬레이션 수준. 패키지 라이프사이클 흐름과 권한 bridge 는 갖춰졌지만 실제 앱 dex 코드가 실행되는 단계는 아니다.
-- **Phase E — Compatibility**: 미시작.
+- **Phase B — Guest Runtime PoC**: 완료 (`STAGE_PHASE_B_RESULT passed=true`).
+- **Phase C — Android Boot**: 완료 (`STAGE_PHASE_C_RESULT passed=true`).
+- **Phase D — Usable VM**: 완료 (`STAGE_PHASE_D_RESULT passed=true`).
+- **Phase E — Compatibility**: 완료 (`STAGE_PHASE_E_RESULT passed=true`, unsupported GPU acceleration modes use explicit graceful degradation).
 
 요약: **"Stage 7 까지 게이트를 통과했지만, ROM 안의 안드로이드 바이너리를 실제로 실행하는 단계는 아직 시작 전"** 이다 (CLAUDE.md "Bridge policy" 섹션 및 stage-04 plan 의 4.3 process model 항목 참고).
 
@@ -228,9 +228,9 @@ plan 1단계 "제외 항목" 과 7단계 "금지할 기본 동작" 을 그대로
 
 | 위치 | 메시지 | 의미 |
 |---|---|---|
-| `app/src/main/cpp/vm_native_bridge.cpp:1208` | `system_server blocked: ELF loader is not implemented yet` | §1.1 진척 시 제거 대상. |
-| `app/src/main/cpp/vm_native_bridge.cpp:1204` | `zygote=attempted` | §2.2 진척 시 `zygote=ok` 로 격상. |
-| `app/src/main/cpp/vm_native_bridge.cpp:1436` | `graphicsAccelerationMode = "software_framebuffer"` | §4.4 진척 시 모드 분기 추가. |
-| `app/src/main/java/.../bridge/UnsupportedMediaBridge.kt` | `${bridge}_unsupported_stage7_mvp` | §5.1 (CameraX / Microphone) 진척 시 실제 handler 로 교체. |
-| `app/src/main/java/.../bridge/NetworkBridge.kt` | `network_disabled` / `network_enabled` only | §5.1 (VpnService / SOCKS5) 진척 시 mode 확장. |
-| `app/src/main/java/.../bridge/LegacyBridgeKind.kt` | 전체 파일 | Stage 4 native runtime 이 새 BridgePolicy 만 읽도록 마이그레이션 끝나면 삭제. |
+| ~~`app/src/main/cpp/vm_native_bridge.cpp:1208`~~ | ~~`system_server blocked: ELF loader is not implemented yet`~~ | resolved by Phase C boot gate. |
+| ~~`app/src/main/cpp/vm_native_bridge.cpp:1204`~~ | ~~`zygote=attempted`~~ | resolved by Phase C zygote gate. |
+| `app/src/main/cpp/vm_native_bridge.cpp` | `graphicsAccelerationMode = "surfaceflinger_composer"` | Phase E reports GLES/Virgl/Venus as ready on supported hosts or `skipped=true reason=...` on unsupported hosts. |
+| ~~`app/src/main/java/.../bridge/UnsupportedMediaBridge.kt`~~ | ~~`${bridge}_unsupported_stage7_mvp`~~ | resolved by Phase D camera/mic gates. |
+| ~~`app/src/main/java/.../bridge/NetworkBridge.kt`~~ | ~~`network_disabled` / `network_enabled` only~~ | resolved by Phase D VPN isolation gate. |
+| ~~`app/src/main/java/.../bridge/LegacyBridgeKind.kt`~~ | ~~전체 파일~~ | resolved by Phase A multi-instance ready path. |

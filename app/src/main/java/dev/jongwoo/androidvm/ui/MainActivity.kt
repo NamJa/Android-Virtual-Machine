@@ -2,7 +2,6 @@ package dev.jongwoo.androidvm.ui
 
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.IBinder
@@ -228,8 +227,7 @@ private fun MainScreen(
                         OutlinedButton(
                             onClick = {
                                 context.startActivity(
-                                    Intent(context, VmNativeActivity::class.java)
-                                        .putExtra(VmNativeActivity.EXTRA_INSTANCE_ID, config.instanceId),
+                                    VmNativeActivity.displayIntent(context, config.instanceId),
                                 )
                                 managerHandle.markRunning(config.instanceId)
                             },
@@ -317,8 +315,7 @@ private fun MainScreen(
                 onLaunchPackage = { pkg ->
                     apkPipeline.launch(config.instanceId, pkg.packageName)
                     context.startActivity(
-                        Intent(context, VmNativeActivity::class.java)
-                            .putExtra(VmNativeActivity.EXTRA_INSTANCE_ID, config.instanceId),
+                        VmNativeActivity.displayIntent(context, config.instanceId),
                     )
                     managerHandle.markRunning(config.instanceId)
                     packageMessage = "Launching ${pkg.label}"

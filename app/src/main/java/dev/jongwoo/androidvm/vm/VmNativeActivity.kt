@@ -2,6 +2,7 @@ package dev.jongwoo.androidvm.vm
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -15,7 +16,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import dev.jongwoo.androidvm.R
 
-class VmNativeActivity : Activity(), SurfaceHolder.Callback {
+open class VmNativeActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var instanceId: String
     private lateinit var surfaceView: SurfaceView
     private var attached = false
@@ -151,6 +152,18 @@ class VmNativeActivity : Activity(), SurfaceHolder.Callback {
 
     companion object {
         const val EXTRA_INSTANCE_ID = "extra.instanceId"
+
+        internal fun activityClassFor(instanceId: String): Class<out VmNativeActivity> = when (VmProcessSlots.processSlotFor(instanceId)) {
+            ":vm1" -> VmNativeActivity::class.java
+            ":vm2" -> VmNativeActivity2::class.java
+            ":vm3" -> VmNativeActivity3::class.java
+            ":vm4" -> VmNativeActivity4::class.java
+            else -> VmNativeActivity::class.java
+        }
+
+        fun displayIntent(context: Context, instanceId: String): Intent =
+            Intent(context, activityClassFor(instanceId))
+                .putExtra(EXTRA_INSTANCE_ID, instanceId)
     }
 }
 

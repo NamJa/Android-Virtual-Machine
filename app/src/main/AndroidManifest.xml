@@ -29,6 +29,27 @@
             android:launchMode="singleInstance"
             android:process=":vm1"
             android:theme="@style/Theme.AndroidVirtualMachine.Native" />
+        <activity
+            android:name=".vm.VmNativeActivity2"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:process=":vm2"
+            android:theme="@style/Theme.AndroidVirtualMachine.Native" />
+        <activity
+            android:name=".vm.VmNativeActivity3"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:process=":vm3"
+            android:theme="@style/Theme.AndroidVirtualMachine.Native" />
+        <activity
+            android:name=".vm.VmNativeActivity4"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:process=":vm4"
+            android:theme="@style/Theme.AndroidVirtualMachine.Native" />
 
         <activity
             android:name=".ui.MainActivity"
@@ -44,6 +65,21 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             android:process=":vm1" />
+        <service
+            android:name=".vm.VmInstanceService2"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:process=":vm2" />
+        <service
+            android:name=".vm.VmInstanceService3"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:process=":vm3" />
+        <service
+            android:name=".vm.VmInstanceService4"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:process=":vm4" />
 
         <service
             android:name=".vm.VmManagerService"

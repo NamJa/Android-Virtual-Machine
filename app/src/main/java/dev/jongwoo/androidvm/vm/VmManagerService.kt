@@ -32,7 +32,8 @@ class VmManagerService : Service() {
     private val states = MutableStateFlow<Map<String, VmState>>(emptyMap())
     private val knownInstances = linkedSetOf<String>()
     private lateinit var store: VmRuntimeStateStore
-    private var instanceMessenger: Messenger? = null
+    private val instanceMessengers = mutableMapOf<Class<out VmInstanceService>, Messenger>()
+    private val instanceConnections = mutableMapOf<Class<out VmInstanceService>, ServiceConnection>()
     private lateinit var replyMessenger: Messenger
     private val replyHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
@@ -44,20 +45,6 @@ class VmManagerService : Service() {
                 }
                 else -> super.handleMessage(msg)
             }
-        }
-    }
-    private val instanceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val messenger = service?.let { Messenger(it) } ?: return
-            instanceMessenger = messenger
-            registerReply(messenger)
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            instanceMessenger = null
-            // The :vm1 process has died — anything we believed was RUNNING/STARTING is no longer
-            // accurate. Fold it back to STOPPED so the UI does not display stale state.
-            reconcileAfterInstanceDeath()
         }
     }
 
@@ -82,22 +69,42 @@ class VmManagerService : Service() {
         }
         knownInstances.addAll(merged.keys)
         states.value = merged
-        bindInstanceServiceIfNeeded()
+        bindInstanceServiceIfNeeded(VmConfig.DEFAULT_INSTANCE_ID)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
-        instanceMessenger?.let { unregisterReply(it) }
-        runCatching { unbindService(instanceConnection) }
+        instanceMessengers.values.forEach { unregisterReply(it) }
+        instanceConnections.values.forEach { connection ->
+            runCatching { unbindService(connection) }
+        }
         super.onDestroy()
     }
 
-    private fun bindInstanceServiceIfNeeded() {
-        if (instanceMessenger != null) return
+    private fun bindInstanceServiceIfNeeded(instanceId: String) {
+        val serviceClass = VmInstanceService.serviceClassFor(instanceId)
+        if (instanceMessengers[serviceClass] != null) return
+        if (instanceConnections[serviceClass] != null) return
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                val messenger = service?.let { Messenger(it) } ?: return
+                instanceMessengers[serviceClass] = messenger
+                registerReply(messenger)
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                instanceMessengers.remove(serviceClass)
+                instanceConnections.remove(serviceClass)
+                reconcileAfterInstanceDeath()
+            }
+        }
+        instanceConnections[serviceClass] = connection
         runCatching {
-            val intent = Intent(this, VmInstanceService::class.java)
-            bindService(intent, instanceConnection, Context.BIND_AUTO_CREATE)
+            val intent = Intent(this, serviceClass)
+            bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        }.onFailure {
+            instanceConnections.remove(serviceClass)
         }
     }
 
@@ -109,7 +116,7 @@ class VmManagerService : Service() {
         try {
             messenger.send(msg)
         } catch (_: RemoteException) {
-            instanceMessenger = null
+            instanceMessengers.entries.removeAll { it.value == messenger }
         }
     }
 
@@ -125,7 +132,7 @@ class VmManagerService : Service() {
         require(instanceId.isNotBlank()) { "instanceId must not be blank" }
         updateState(instanceId, VmState.STARTING)
         VmInstanceService.start(applicationContext, instanceId)
-        bindInstanceServiceIfNeeded()
+        bindInstanceServiceIfNeeded(instanceId)
         return true
     }
 
