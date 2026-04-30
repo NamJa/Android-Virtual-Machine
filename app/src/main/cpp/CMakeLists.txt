@@ -19,9 +19,15 @@ set(AVM_VFS_SOURCES
 
 set(AVM_PROPERTY_SOURCES
     property/property_service.cpp
+    property/property_area.cpp
+    property/build_props.cpp
 )
 
 set(AVM_BINDER_SOURCES
+    binder/parcel.cpp
+    binder/binder_device.cpp
+    binder/transaction.cpp
+    binder/thread_pool.cpp
     binder/service_manager.cpp
 )
 
@@ -29,6 +35,9 @@ set(AVM_DEVICE_SOURCES
     device/graphics_device.cpp
     device/audio_device.cpp
     device/input_device.cpp
+    device/ashmem.cpp
+    device/gralloc.cpp
+    device/composer.cpp
 )
 
 # Phase B native-runtime modules (ELF loader, syscall dispatch, guest process state).
@@ -49,6 +58,7 @@ set(AVM_SYSCALL_SOURCES
     syscall/io.cpp
     syscall/mem.cpp
     syscall/time.cpp
+    syscall/socket.cpp
 )
 
 set(AVM_JNI_SOURCES

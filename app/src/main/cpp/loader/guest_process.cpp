@@ -67,4 +67,35 @@ std::string GuestProcess::lastError() const {
     return lastError_;
 }
 
+bool GuestProcess::markLibcInit() {
+    std::lock_guard<std::mutex> g(lock_);
+    if (state_ != GuestProcessState::LOADING) return false;
+    libcInit_ = true;
+    state_ = GuestProcessState::RUNNING;
+    return true;
+}
+
+bool GuestProcess::libcInitReached() const {
+    std::lock_guard<std::mutex> g(lock_);
+    return libcInit_;
+}
+
+void GuestProcess::setLibsLoaded(int count) {
+    std::lock_guard<std::mutex> g(lock_);
+    if (count > libsLoaded_) libsLoaded_ = count;
+}
+int GuestProcess::libsLoaded() const {
+    std::lock_guard<std::mutex> g(lock_);
+    return libsLoaded_;
+}
+
+void GuestProcess::setZygoteSocketPath(const std::string& path) {
+    std::lock_guard<std::mutex> g(lock_);
+    zygoteSocketPath_ = path;
+}
+std::string GuestProcess::zygoteSocketPath() const {
+    std::lock_guard<std::mutex> g(lock_);
+    return zygoteSocketPath_;
+}
+
 }  // namespace avm::loader

@@ -43,5 +43,12 @@
                 <action android:name="dev.jongwoo.androidvm.debug.RUN_PHASE_B_DIAGNOSTICS" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".debug.StagePhaseCDiagnosticsReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_PHASE_C_DIAGNOSTICS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
