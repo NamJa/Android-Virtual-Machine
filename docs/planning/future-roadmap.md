@@ -138,3 +138,4 @@ Phase E 종료 (STAGE_PHASE_E_RESULT passed=true)
 - 원본 plan: [`VPHONEOS_CLEANROOM_IMPLEMENTATION_PLAN.md`](./VPHONEOS_CLEANROOM_IMPLEMENTATION_PLAN.md).
 - Stage 1~7 상세 plan: `stage-01-mvp-scope.md` ~ `stage-07-permission-bridges.md`.
 - 단기 후속 작업 정리: [`post-stage7-roadmap.md`](./post-stage7-roadmap.md).
+- Phase A-E 이후 product release 후속 계획: [`product-readiness-plan.md`](./product-readiness-plan.md).
