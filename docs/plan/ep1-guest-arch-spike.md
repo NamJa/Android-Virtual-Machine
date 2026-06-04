@@ -94,11 +94,11 @@ adb logcat -s AVM.GuestExecProbe
 | 클린룸 적합 | ✓ | ✓ | ✓ |
 | 제품 목표 도달 | ✗ | ✓ | ✓ |
 
-## 7. 잠정 권고
+## 7. 권고 (에뮬레이터 실증으로 확정 — §10.1)
 
-**Option B**(forked child + 진짜 linker64 + seccomp `SECCOMP_RET_TRAP` syscall 서비싱, execve 회피·memfd/PROT_EXEC 매핑)를 **잠정 채택**한다.
+**Option B**(forked child + 진짜 linker64 + seccomp `SECCOMP_RET_TRAP` syscall 서비싱, execve 회피·memfd/PROT_EXEC 매핑)를 **채택**한다.
 - 근거: unmodified 게스트 실행 + 프로세스 분리로 TLS/시그널/clone 자연 해소 + 비루트에서 execve 의존 회피.
-- **확정 조건**: §5 probe에서 `seccomp_trap=true && (memfd_exec || prot_exec_mmap)=true`. 거짓이면 B′ 또는 범위 재정의로 분기.
+- **확정 조건 충족**: §5 probe `seccomp_trap=true && (memfd_exec || prot_exec_mmap)=true`가 API 29/35 arm64 에뮬레이터에서 참(§10.1). 물리 기기 재확인은 권장 잔여 항목.
 - A는 배제(제품 목표와 양립 불가), C는 범위 밖.
 
 확정 시 G-track 매핑:
@@ -125,12 +125,30 @@ adb logcat -s AVM.GuestExecProbe
 ## 10. 출구 게이트 — 현재 상태(정직)
 
 ```text
-GUEST_ARCH_DECISION passed=false approach=B(provisional) spike_oncreate_reached=false risks_logged=true
+GUEST_ARCH_DECISION passed=partial approach=B(confirmed: emulator API29/API35 arm64) spike_oncreate_reached=false risks_logged=true
 ```
 
 - `risks_logged=true`: §8 완료.
-- `approach=B(provisional)`: §7. probe 결과로 확정.
-- `passed=false` / `spike_oncreate_reached=false`: probe가 실기기에서 미실행이고 onCreate 미도달. **canned 통과 금지 원칙**에 따라 거짓으로 표기. 실기기 실증 후 갱신.
+- `approach=B(confirmed)`: §10.1 — 에뮬레이터 probe로 §7 권고가 경험적으로 확인됨. 더 이상 "잠정"이 아님.
+- `spike_oncreate_reached=false`: 실제 linker 부트스트랩(EP2.2)이 onCreate 첫 관문에 도달해야 충족. 미도달.
+- `passed=partial`: 아키텍처 결정은 확정(probe 실증), 그러나 게이트 완전 종료(`passed=true`)는 `spike_oncreate_reached=true`까지 보류. **canned 통과 금지 원칙** 준수.
+
+### 10.1 실증 결과 (2026-06-04, headless/window 에뮬레이터)
+
+[`GuestExecProbeReceiver`](../../app/src/debug/java/dev/jongwoo/androidvm/debug/GuestExecProbeReceiver.kt)를 두 타깃에서 broadcast 실행. 두 경우 모두:
+
+```text
+GUEST_EXEC_PROBE arch=arm64-v8a prot_exec_mmap=true memfd_exec=true seccomp_trap=true ptrace_child=true clone_thread=true option_b_viable=true option_b_prime_viable=true
+```
+
+| 타깃 | API | ABI | option_b_viable | seccomp_trap | exec mapping |
+| --- | --- | --- | --- | --- | --- |
+| Pixel_9_Pro_35 | 35 (현재) | arm64-v8a | ✅ true | ✅ | ✅ (prot+memfd) |
+| Medium_Tablet_29 | 29 (Android 10, W^X 시작점) | arm64-v8a | ✅ true | ✅ | ✅ (prot+memfd) |
+
+- §5 해석 규칙 `seccomp_trap && (memfd_exec || prot_exec_mmap)` 충족 → **Option B 확정**.
+- Android 10 W^X 기준선(API 29)에서도 실행 가능 매핑과 자체 seccomp SIGSYS가 모두 동작 → 가장 보수적 지점에서 검증됨.
+- **남은 확인**: 물리 arm64 기기(에뮬레이터는 일부 SELinux 정책이 더 관대할 수 있음). 현재 환경에 연결 기기 없음 → 물리 기기 확보 시 동일 probe 1회 재실행 권장. 결과가 동일하면 `passed=true`의 전제 1개(probe)가 완전 확정.
 
 ## 11. 인용 (코드 근거)
 
