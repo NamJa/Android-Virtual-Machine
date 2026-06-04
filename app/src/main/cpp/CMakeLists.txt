@@ -48,6 +48,7 @@ set(AVM_LOADER_SOURCES
     loader/aux_vector.cpp
     loader/linker_bridge.cpp
     loader/guest_process.cpp
+    loader/initial_stack.cpp
 )
 
 set(AVM_SYSCALL_SOURCES
@@ -66,9 +67,12 @@ set(AVM_JNI_SOURCES
     jni/phase_b_bridge.cpp
 )
 
-# EP1 spike — guest execution capability probe (measurement instrument).
+# EP1/EP2 spikes — capability probe, linker bootstrap, seccomp SIGSYS gateway.
 set(AVM_SPIKE_SOURCES
     spike/guest_exec_probe.cpp
+    spike/linker_bootstrap_probe.cpp
+    spike/syscall_gateway.cpp
+    spike/syscall_gateway_probe.cpp
 )
 
 set(AVM_SOURCES

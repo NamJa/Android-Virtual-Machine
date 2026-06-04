@@ -71,5 +71,19 @@
                 <action android:name="dev.jongwoo.androidvm.debug.RUN_GUEST_EXEC_PROBE" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".debug.LinkerBootstrapProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_LINKER_BOOTSTRAP_PROBE" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".debug.SyscallGatewayProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_SYSCALL_GATEWAY_PROBE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
