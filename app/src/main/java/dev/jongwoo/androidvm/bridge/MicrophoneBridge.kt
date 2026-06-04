@@ -2,27 +2,11 @@ package dev.jongwoo.androidvm.bridge
 
 import org.json.JSONObject
 
-/** Phase D.6 PCM input source. Production wraps `AudioRecord`, tests pass canned PCM. */
+/** Phase D.6 PCM input source. Production wraps `AudioRecord`; debug tests provide canned PCM. */
 interface AudioInputSource {
     fun read(buffer: ShortArray): Int
     val sampleRateHz: Int
     val channelCount: Int
-}
-
-class FixedPcmSource(
-    private val data: ShortArray,
-    override val sampleRateHz: Int = 48_000,
-    override val channelCount: Int = 1,
-) : AudioInputSource {
-    private var offset = 0
-
-    override fun read(buffer: ShortArray): Int {
-        if (offset >= data.size) return -1
-        val n = minOf(buffer.size, data.size - offset)
-        System.arraycopy(data, offset, buffer, 0, n)
-        offset += n
-        return n
-    }
 }
 
 /**

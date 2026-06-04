@@ -31,8 +31,8 @@ data class CameraFrame(
 }
 
 /**
- * Phase D.5 frame source. Production implementations wrap CameraX `ImageAnalysis`; tests pass a
- * [FixedCameraSource] that returns a single canned frame.
+ * Phase D.5 frame source. Production implementations wrap CameraX `ImageAnalysis`; debug and unit
+ * tests provide fixed sources from non-release source sets.
  */
 interface CameraXFrameSource {
     /** Returns the next available frame, or null if the source has not produced one yet. */
@@ -40,26 +40,6 @@ interface CameraXFrameSource {
 
     /** Total number of frames pushed since the source was opened. */
     fun pushedFrames(): Long
-}
-
-class FixedCameraSource(
-    private val frame: CameraFrame? = CameraFrame(
-        width = 640,
-        height = 480,
-        timestampNanos = 0L,
-        ySize = 640 * 480,
-        uSize = 640 * 480 / 4,
-        vSize = 640 * 480 / 4,
-    ),
-) : CameraXFrameSource {
-    private var emitted: Long = 0L
-
-    override suspend fun nextFrame(): CameraFrame? {
-        if (frame != null) emitted += 1
-        return frame
-    }
-
-    override fun pushedFrames(): Long = emitted
 }
 
 /**
