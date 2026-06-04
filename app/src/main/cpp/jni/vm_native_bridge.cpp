@@ -1293,9 +1293,16 @@ void phaseBGuestRuntimeEntrypoint(const std::shared_ptr<Instance>& instance, con
         instance->properties["sys.boot_completed"] = "1";
         instance->properties["dev.bootcomplete"] = "1";
         instance->properties["ro.runtime.firstboot"] = std::to_string(bootCompletedAt);
+        // EP2.1: this boot path is SIMULATED — it fabricates the boot markers
+        // without executing a real guest (no linker64, no zygote process). The
+        // explicit `runtime_mode=simulated` marker lets the product gate reject
+        // it as not-real (see GuestBootStatus). EP2.2+ replaces this with a real
+        // guest boot whose markers are guest-originated and the marker disappears.
+        instance->properties["avm.runtime.simulated"] = "1";
         commitSurfaceFlingerFirstFrameLocked(*instance);
         instance->phaseCFirstFrameMillis = std::max<int64_t>(1, nowMillis() - bootStart);
         instance->bootstrapStatus =
+            "runtime_mode=simulated;"
             "virtual_init=ok;property_service=ok;servicemanager=ok;"
             "zygote=main_loop;zygote_socket=accepting;system_server=boot_completed;"
             "surfaceflinger=first_frame;boot_completed=1";
