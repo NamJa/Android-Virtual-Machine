@@ -66,6 +66,11 @@ set(AVM_JNI_SOURCES
     jni/phase_b_bridge.cpp
 )
 
+# EP1 spike — guest execution capability probe (measurement instrument).
+set(AVM_SPIKE_SOURCES
+    spike/guest_exec_probe.cpp
+)
+
 set(AVM_SOURCES
     ${AVM_CORE_SOURCES}
     ${AVM_VFS_SOURCES}
@@ -75,6 +80,7 @@ set(AVM_SOURCES
     ${AVM_LOADER_SOURCES}
     ${AVM_SYSCALL_SOURCES}
     ${AVM_JNI_SOURCES}
+    ${AVM_SPIKE_SOURCES}
 )
 
 add_library(avm_host SHARED ${AVM_SOURCES})

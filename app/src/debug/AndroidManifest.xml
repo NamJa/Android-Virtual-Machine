@@ -64,5 +64,12 @@
                 <action android:name="dev.jongwoo.androidvm.debug.RUN_PHASE_E_DIAGNOSTICS" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".debug.GuestExecProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_GUEST_EXEC_PROBE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
