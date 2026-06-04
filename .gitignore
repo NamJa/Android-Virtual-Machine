@@ -34,3 +34,6 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Guest ROM build artifacts (build_aosp_guest_rom.sh) — never commit ROMs
+out/

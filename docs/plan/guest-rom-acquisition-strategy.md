@@ -79,7 +79,7 @@ ROM 확보 후, 시뮬레이션 부팅을 실제 부팅으로 대체:
 
 1. **EP8.3 tar.zst 추출 구현** — ✅ 완료(호스트 로직 + NDK libzstd on-device 실증, API 29). 다음 선결로 진행.
 2. **RootfsHealthCheck 확장** — ✅ 완료. `ok`(구조)와 별개로 `bootReady` 신호 추가: `system/bin/linker64`·`system/lib64/libc.so`·`system/bin/app_process64`가 실제 arm64 ELF인지 검증(ELF magic+class64+EM_AARCH64). placeholder fixture=ok·!bootReady, 실제 AOSP=bootReady. 기존 진단 무영향(JVM 6/6).
-3. **`tools/build_aosp_guest_rom.sh`** + Docker 빌드환경 문서.
+3. **`tools/build_aosp_guest_rom.sh`** — ✅ 작성 완료. `--rootfs-dir`(이식성, tar+zstd) / `--system-img`(Linux: simg2img+debugfs 추출) 모드 + Docker AOSP 7.1.2 빌드 절차 문서화. 파이프라인 스키마(tar.zst+manifest+sha256) 준수, bootReady 전제(linker64/libc/app_process64 arm64 ELF) 검증, symlink·권한 보존. 패키징 경로 mac 스모크 검증(sha 일치·symlink roundtrip·음성 케이스). 출력물은 미커밋(`out/` gitignore).
 4. **EP8.2 Ed25519 import 연결** — ✅ 게이트 연결 완료. `RomSignaturePolicy`를 `RomInstaller.install()`에 배선: 서명 이미지는 Ed25519 검증(+patch level 단조 증가) 통과 후에만 extract/commit, 미서명 번들 dev 이미지는 허용, 서명됐는데 trust anchor 없으면 fail-closed 거부(`SIGNATURE_REJECTED`). JVM 7/7(실제 Ed25519 키쌍). ⚠️ **캐비엇**: JCA `Ed25519`는 Android **API 33+**만 — minSdk 26의 API 26–32 서명 import는 **번들 Ed25519 구현(BouncyCastle/eddsa 등) 후속 필요**. 미서명 dev 경로는 무영향.
 5. 그 다음 §7 VmInstanceService 통합 → 실제 부팅 시도 → EP3.
 
