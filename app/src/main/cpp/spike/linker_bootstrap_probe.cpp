@@ -152,7 +152,7 @@ Java_dev_jongwoo_androidvm_vm_LinkerBootstrapProbe_nativeProbe(
         close(pipefd[1]);
         // EP2.3: optionally run the real linker UNDER the seccomp SIGSYS gateway,
         // proving the ALLOW-list does not break real guest execution.
-        if (jGateway && !avm::guest::installGuestSyscallGateway()) _exit(43);
+        if (jGateway && !avm::guest::installGuestSyscallGateway(/*extended=*/false)) _exit(43);
         avm::loader::InitialStack st = avm::loader::buildInitialStack(
             stackBase, stackTop, {execPath}, {}, aux, "aarch64", execPath, random16);
         if (!st.ok) _exit(42);

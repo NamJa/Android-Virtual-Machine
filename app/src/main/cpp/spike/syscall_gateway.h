@@ -11,9 +11,13 @@ namespace avm::guest {
  *  - a forbidden set (demonstrated with `ptrace`) returns EPERM via RET_ERRNO;
  *  - everything else is ALLOWed straight to the kernel (the guest runs normally).
  *
+ * When `extended` is true, also TRAPs path-query syscalls (readlinkat) to
+ * demonstrate the HOST_SERVICED class beyond uname; when false (bootstrap-compat)
+ * only uname is trapped so a real linker bootstraps unhindered.
+ *
  * Returns true if PR_SET_NO_NEW_PRIVS + filter install succeeded.
  */
-bool installGuestSyscallGateway();
+bool installGuestSyscallGateway(bool extended);
 
 /** Number of syscalls serviced by the SIGSYS handler in this process so far. */
 int guestGatewayServicedCount();

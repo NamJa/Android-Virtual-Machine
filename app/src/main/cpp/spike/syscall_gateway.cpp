@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include <signal.h>
 #include <sys/prctl.h>
@@ -55,11 +56,23 @@ void onSigsys(int, siginfo_t* info, void* ctxv) {
     long ret = -ENOSYS;
 
 #if defined(__aarch64__)
-    auto* regs = ctx->uc_mcontext.regs; // x0..x30; x0 = arg0 / return value
+    auto* regs = ctx->uc_mcontext.regs; // x0..x30; x0..x5 = args, x0 = return value
     if (nr == __NR_uname) {
         fillSyntheticUtsname(reinterpret_cast<struct utsname*>(regs[0]));
         g_serviced++;
         ret = 0;
+    } else if (nr == __NR_readlinkat) {
+        // readlinkat(dirfd=x0, path=x1, buf=x2, bufsiz=x3): synthetic /proc/self/exe.
+        const char* path = reinterpret_cast<const char*>(regs[1]);
+        if (path && std::strcmp(path, "/proc/self/exe") == 0) {
+            static const char kExe[] = "/system/bin/app_process64";
+            const size_t want = sizeof(kExe) - 1;
+            const size_t cap = static_cast<size_t>(regs[3]);
+            const size_t n = want < cap ? want : cap;
+            std::memcpy(reinterpret_cast<void*>(regs[2]), kExe, n);
+            g_serviced++;
+            ret = static_cast<long>(n);
+        }
     }
     regs[0] = static_cast<uint64_t>(ret);
 #elif defined(__x86_64__)
@@ -85,7 +98,7 @@ void onSigsys(int, siginfo_t* info, void* ctxv) {
 
 } // namespace
 
-bool installGuestSyscallGateway() {
+bool installGuestSyscallGateway(bool extended) {
     struct sigaction sa {};
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sa.sa_sigaction = onSigsys;
@@ -96,25 +109,30 @@ bool installGuestSyscallGateway() {
     const uint32_t arch = auditArch();
     const uint32_t errnoPerm = SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA);
 
-    struct sock_filter filter[] = {
-        // Foreign arch -> allow (never brick on an unexpected arch).
-        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    std::vector<struct sock_filter> f;
+    // Foreign arch -> allow (never brick on an unexpected arch).
+    f.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)));
+    f.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0));
+    f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+    f.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)));
+    // host-serviced: uname -> TRAP (SIGSYS)
+    f.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_uname, 0, 1));
+    f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP));
+    if (extended) {
+        // path-query class demo: readlinkat -> TRAP. Omitted in bootstrap-compat
+        // mode so a real linker's readlinkat calls run unhindered.
+        f.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_readlinkat, 0, 1));
+        f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP));
+    }
+    // forbidden: ptrace -> EPERM
+    f.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_ptrace, 0, 1));
+    f.push_back(BPF_STMT(BPF_RET | BPF_K, errnoPerm));
+    // everything else runs in the guest directly
+    f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
 
-        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-        // host-serviced demo: uname -> TRAP (SIGSYS)
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_uname, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
-        // forbidden demo: ptrace -> EPERM
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_ptrace, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, errnoPerm),
-        // everything else runs in the guest directly
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
-    };
     struct sock_fprog prog {};
-    prog.len = static_cast<unsigned short>(sizeof(filter) / sizeof(filter[0]));
-    prog.filter = filter;
+    prog.len = static_cast<unsigned short>(f.size());
+    prog.filter = f.data();
 
     if (syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0u, &prog) != 0) {
         if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0) != 0) return false;

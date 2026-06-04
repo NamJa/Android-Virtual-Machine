@@ -2,7 +2,7 @@
 
 > 작성일: 2026-06-04
 > 상위: [`production-execution-phases.md`](./production-execution-phases.md) EP2 · [`ep1-guest-arch-spike.md`](./ep1-guest-arch-spike.md)
-> 상태: **핵심 메커니즘 실증** — EP2.1 완료, EP2.2 부트스트랩·EP2.3 게이트웨이 에뮬레이터 실증(API 29/36), EP2.5 TLS 분리 확인, EP2.8 ALLOW 확인. 잔여: 클린룸 게스트 ROM 부팅 통합 + EP2.4/2.6/2.7 서비싱 폭(아래 §3·§5).
+> 상태: **핵심 메커니즘 + 서비싱 클래스 실증** — EP2.1 완료, EP2.2 부트스트랩·EP2.3 게이트웨이·EP2.4 mmap·EP2.6 경로 재작성+질의 서비싱·EP2.7 /proc 라우팅 에뮬레이터 실증(API 29/36), EP2.5 TLS 분리·EP2.8 ALLOW 확인. **잔여: ① openat 파일 내용 서비싱(IP-allow) ② 클린룸 게스트 ROM 부팅 end-to-end 통합** → 이 둘이 `G1 passed=true`의 전제(아래 §3·§5).
 
 ## 0. 전제 — 정직한 경계
 
@@ -47,6 +47,13 @@ host process (avm_host, :vmN)
 - **한계(정직)**: ① 프록시는 에뮬레이터 자신의 Android 바이너리 — 클린룸 게스트 ROM이 아님. 제품 부팅은 사용자 ROM의 linker를 동일 코드로 돌리고 VFS/seccomp 게이트웨이를 얹어야 함(EP2.3+). ② seccomp 미설치 상태(syscall이 호스트 커널 직접) — EP2.2는 부트스트랩만, 서비싱은 EP2.3.
 - 검증: 네이티브 컴파일(3 ABI, 심볼 링크), 에뮬레이터 실행(API 29/36).
 
+### EP2.4 / EP2.6 / EP2.7 — 메모리·VFS·proc 서비싱 🟡 (에뮬레이터 실증)
+- **EP2.6 경로 재작성 로직** [`GuestPathRewrite`](../../app/src/main/java/dev/jongwoo/androidvm/vm/GuestPathRewrite.kt): 게스트 절대경로 → instance rootfs 경로, `..` traversal 방어(escape 시 거부), `.`/빈 세그먼트 collapse. 검증: `GuestPathRewriteTest`(JVM, 6/6). openat 파일 내용 서비싱이 착지할 때 native 미러가 이 spec을 따른다(추가로 IP-allow 재발급 기법 필요).
+- **경로 질의 서비싱 실증**: 확장 게이트웨이가 `readlinkat("/proc/self/exe")`를 TRAP→합성 경로(`/system/bin/app_process64`) 반환(재발급 없음). API 29: `readlink_ret=25 exe=/system/bin/app_process64 serviced=2 child_exit=0`. HOST_SERVICED 경로-질의 클래스 동작 확인.
+- **EP2.4 실제 메모리**: 게이트웨이 하에서 `mmap(PROT_READ|WRITE, ANON)` + 쓰기/읽기 정상(`mmap_ok=true`) — ALLOW→커널 직접. Option B에서 brk/mmap은 ALLOW이며, 레거시 `syscall/mem.cpp`의 가짜 brk는 superseded 협조 경로(제품 경로 아님).
+- **EP2.7 /proc**: /proc 경로는 `GuestPathRewrite`로 rootfs 하위 라우팅 + `/proc/self/exe`는 합성 서비싱. 전체 /proc·/sys 내용은 게스트 ROM 통합 시 사전 스테이징/핸들러 확장.
+- **잔여(정직)**: openat **파일 내용** 서비싱 = SIGSYS 핸들러가 재작성 경로를 실제 open해야 하는데, arm64는 openat-only라 핸들러의 재발급이 재트랩됨 → **IP-allow**(우리 코드 IP 범위만 ALLOW하는 BPF) 기법 필요. 설계만 확정, 실증은 게스트 ROM 통합과 함께.
+
 ### EP2.3 — syscall 서비싱: 정책 + seccomp SIGSYS 게이트웨이 🟡 (에뮬레이터 실증)
 - 정책 spec [`GuestSyscallPolicy`](../../app/src/main/java/dev/jongwoo/androidvm/vm/GuestSyscallPolicy.kt): ALLOW/HOST_SERVICED/DENY + 미분류 fail-closed. 검증: `GuestSyscallPolicyTest`(JVM).
 - 게이트웨이 [`spike/syscall_gateway.cpp`](../../app/src/main/cpp/spike/syscall_gateway.cpp): `PR_SET_NO_NEW_PRIVS` + seccomp BPF(TRAP=host-serviced(데모: `uname`), ERRNO=forbidden(데모: `ptrace`), ALLOW=나머지) + SIGSYS 핸들러(ucontext 레지스터로 인자 읽고 합성 서비싱 후 반환값 설정, 재귀 없음).
@@ -62,10 +69,10 @@ host process (avm_host, :vmN)
 | EP2.1 | 시뮬레이션 부팅 격리 | ✅ 완료 | JVM + 네이티브 컴파일 |
 | EP2.2 | 진짜 linker64 부트스트랩 + aux vector | 🟡 메커니즘 실증(에뮬레이터 API29/36: 실제 linker가 PIE 링킹·런타임 진입). 클린룸 게스트 ROM 부팅은 EP2.3+ 게이트웨이 후 | on-device ✅ |
 | EP2.3 | syscall 실서비싱 | 🟡 정책 + seccomp SIGSYS 게이트웨이 메커니즘 실증(uname 서비싱 + 부트스트랩 양립, API 29). 서비싱 폭은 ROM/corpus와 확장 | JVM(정책) + on-device ✅ |
-| EP2.4 | heap/mmap 실제화(가짜 brk 제거) | ⬜ 게이트웨이 ALLOW(커널 직접) 또는 핸들러 서비싱으로 처리 — ROM 통합 시 | on-device |
+| EP2.4 | heap/mmap 실제화 | ✅ 게이트웨이 하 실제 mmap 동작 실증(ALLOW→커널, API29). 가짜 brk는 superseded 협조 경로 | on-device ✅ |
 | EP2.5 | TLS/시그널 경계(프로세스 분리로 해소) | ✅ 실증 — 실제 linker가 fork child에서 host TLS 손상 없이 실행(EP2.2), 게이트웨이는 ucontext 기반 | on-device ✅ |
-| EP2.6 | VFS 경로 재작성 + fd_table 실구현 | ⬜ SIGSYS 핸들러의 openat 서비싱으로 — ROM 통합 시 | 일부 JVM oracle |
-| EP2.7 | /proc·/sys 최소 가상화 | ⬜ 핸들러 서비싱 — ROM 통합 시 | on-device |
+| EP2.6 | VFS 경로 재작성 + 경로 질의 서비싱 | 🟡 GuestPathRewrite 로직(JVM 6/6) + readlinkat 합성 서비싱 실증. openat 파일 내용 서비싱(IP-allow)은 ROM 통합 시 | JVM + on-device ✅ |
+| EP2.7 | /proc·/sys 최소 가상화 | 🟡 /proc 경로 라우팅(GuestPathRewrite) + /proc/self/exe 합성 서비싱. 전체 내용은 ROM 통합 시 | JVM + on-device |
 | EP2.8 | clone(thread) 지원 | 🟡 정책상 ALLOW(커널 직접) — capability probe `clone_thread=true`로 가용 확인 | on-device ✅ |
 
 ## 4. 실기기 선행 작업 (EP2 본체 착수 조건)
@@ -77,14 +84,15 @@ host process (avm_host, :vmN)
 ## 5. 출구 게이트 — 현재 상태(정직)
 
 ```text
-G1_RESULT passed=false linker_real=mechanism-validated(emulator) reloc_applied=true(proxy) syscalls_real=gateway-validated(emulator) heap_real=allow tls_safe=true(process-isolation) vfs_mapped=pending(rom) thread_create=allow-validated synthetic=isolated
+G1_RESULT passed=false linker_real=mechanism-validated(emulator) reloc_applied=true(proxy) syscalls_real=gateway-validated(emulator) heap_real=validated(mmap) tls_safe=true(process-isolation) vfs_mapped=logic+pathquery(file-content pending) thread_create=allow-validated synthetic=isolated
 ```
 
 - `linker_real=mechanism-validated`: 실제 bionic linker64가 우리 스택/auxv/트램펄린으로 실제 PIE를 링킹·실행(EP2.2, API29/36). 게스트 ROM 부팅 시 `true`.
 - `syscalls_real=gateway-validated`: seccomp SIGSYS 게이트웨이가 실제 syscall을 trap→서비싱→반환(EP2.3, uname). 서비싱 폭은 ROM/corpus와 확장.
 - `tls_safe=true(process-isolation)`: fork child 분리로 host/guest TLS 충돌 없음 — 실제 linker 실행으로 확인(EP2.2/2.5).
 - `thread_create=allow-validated`: 정책상 ALLOW + capability probe `clone_thread=true`.
-- `vfs_mapped=pending(rom)`: openat 경로 재작성은 게스트 ROM 통합 시(EP2.6).
+- `vfs_mapped=logic+pathquery`: 경로 재작성 로직(GuestPathRewrite, JVM 6/6) + readlinkat 합성 서비싱 실증. openat **파일 내용** 서비싱(IP-allow)은 ROM 통합 시.
+- `heap_real=validated(mmap)`: 게이트웨이 하 실제 mmap 동작(EP2.4).
 - `synthetic=isolated`: 합성 부팅 라벨 격리(EP2.1). `synthetic=0`은 실제 게스트 부팅 대체 시.
 - **`passed=false` 유지**: 핵심 메커니즘(부트스트랩·게이트웨이)은 에뮬레이터에서 실증됐으나, **클린룸 게스트 ROM 부팅 end-to-end는 미달성**(ROM 부재 + VmInstanceService 부팅 경로 통합 잔여). canned 통과 금지.
 

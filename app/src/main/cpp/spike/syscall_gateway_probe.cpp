@@ -12,6 +12,8 @@
 #include <cstring>
 #include <string>
 
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -27,16 +29,32 @@ Java_dev_jongwoo_androidvm_vm_SyscallGatewayProbe_nativeProbe(JNIEnv* env, jclas
     if (pid < 0) return env->NewStringUTF("{\"ok\":false,\"reason\":\"fork_failed\"}");
     if (pid == 0) {
         close(pipefd[0]);
-        const bool installed = avm::guest::installGuestSyscallGateway();
+        const bool installed = avm::guest::installGuestSyscallGateway(/*extended=*/true);
+
         struct utsname u {};
         std::memset(&u, 0, sizeof(u));
-        const int r = uname(&u); // TRAPped + serviced by the gateway
-        char buf[320];
+        const int unameRet = uname(&u); // TRAP -> synthetic utsname
+
+        char exe[64];
+        std::memset(exe, 0, sizeof(exe));
+        const long linkRet = readlinkat(AT_FDCWD, "/proc/self/exe", exe, sizeof(exe) - 1); // TRAP -> synthetic
+
+        // EP2.4: real anonymous memory works under the gateway (ALLOW -> kernel).
+        bool mmapOk = false;
+        void* m = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m != MAP_FAILED) {
+            static_cast<char*>(m)[0] = 'Z';
+            mmapOk = static_cast<char*>(m)[0] == 'Z';
+            munmap(m, 4096);
+        }
+
+        char buf[384];
         const int n = snprintf(
             buf, sizeof(buf),
             "\"gateway_installed\":%s,\"uname_ret\":%d,\"sysname\":\"%s\",\"machine\":\"%s\","
-            "\"serviced\":%d",
-            installed ? "true" : "false", r, u.sysname, u.machine,
+            "\"readlink_ret\":%ld,\"exe\":\"%s\",\"mmap_ok\":%s,\"serviced\":%d",
+            installed ? "true" : "false", unameRet, u.sysname, u.machine,
+            linkRet, exe, mmapOk ? "true" : "false",
             avm::guest::guestGatewayServicedCount());
         if (n > 0) {
             ssize_t off = 0;
