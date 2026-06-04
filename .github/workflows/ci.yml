@@ -67,7 +67,8 @@ jobs:
             :app:testDebugUnitTest \
             :app:assembleDebug \
             :app:lintDebug \
-            :app:assembleRelease
+            :app:assembleRelease \
+            :app:assembleProduct
       - name: Publish unit test report
         if: failure()
         uses: actions/upload-artifact@v4

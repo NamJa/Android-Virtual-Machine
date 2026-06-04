@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EP0.1/EP0.2 — product (release-equivalent) build variant only.
+  Carries the on-device product gate trigger. The real `release` build type has
+  NO product source set, so it ships zero diagnostic/gate receivers; the debug
+  Stage/Phase receivers live in app/src/debug/ and never reach product or release.
+  ProductReleaseSurfaceGuardTest enforces this separation.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".product.ProductGateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.product.RUN_PRODUCT_GATE" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

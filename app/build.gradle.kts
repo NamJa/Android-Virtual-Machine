@@ -15,6 +15,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
+        // EP0.3: product gate runner reads this to decide whether the on-device
+        // product gate surface is present. Default false; only the `product`
+        // build type flips it to true (see buildTypes below).
+        buildConfigField("boolean", "PRODUCT_GATE", "false")
+
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
@@ -29,6 +34,21 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+        }
+        // EP0.1: release-equivalent variant that carries the on-device product
+        // gate runner surface (app/src/product/) but, like release, pulls NO
+        // app/src/debug/ diagnostic receivers. Guarded by ProductReleaseSurfaceGuardTest.
+        create("product") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "PRODUCT_GATE", "true")
+        }
     }
 
     compileOptions {
