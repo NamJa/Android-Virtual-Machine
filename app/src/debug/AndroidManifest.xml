@@ -85,5 +85,12 @@
                 <action android:name="dev.jongwoo.androidvm.debug.RUN_SYSCALL_GATEWAY_PROBE" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".debug.RomTarZstProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jongwoo.androidvm.debug.RUN_ROM_TARZST_PROBE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

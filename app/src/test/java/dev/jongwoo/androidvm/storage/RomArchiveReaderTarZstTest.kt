@@ -41,7 +41,9 @@ class RomArchiveReaderTarZstTest {
         checksumExists = true,
     )
 
-    private fun reader(bytes: ByteArray) = RomArchiveReader { ByteArrayInputStream(bytes) }
+    // JVM tests use zstd-jni explicitly; on-device the default is NDK libzstd.
+    private fun reader(bytes: ByteArray) =
+        RomArchiveReader(openAsset = { ByteArrayInputStream(bytes) }, zstd = ZstdJniDecompressor())
 
     private fun tarZst(build: (TarArchiveOutputStream) -> Unit): ByteArray {
         val baos = ByteArrayOutputStream()

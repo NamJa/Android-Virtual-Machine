@@ -2,13 +2,16 @@ package dev.jongwoo.androidvm.storage
 
 import android.content.Context
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
 import java.util.zip.ZipInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream
 
-class RomArchiveReader(private val openAsset: (String) -> InputStream) {
+class RomArchiveReader(
+    private val openAsset: (String) -> InputStream,
+    private val zstd: ZstdDecompressor = defaultZstdDecompressor(),
+) {
     constructor(context: Context) : this({ assetPath -> context.assets.open(assetPath) })
 
     fun extract(
@@ -77,6 +80,8 @@ class RomArchiveReader(private val openAsset: (String) -> InputStream) {
         // on-device zstd path is to be backed by NDK libzstd (EP8.3 follow-up).
         return try {
             extractTarZstInner(candidate, destinationRootfs, ::within, onProgress)
+        } catch (t: IOException) {
+            RomArchiveExtractionResult.Failed("tar.zst extraction failed: ${t.message}")
         } catch (t: UnsatisfiedLinkError) {
             RomArchiveExtractionResult.Failed("zstd native unavailable on this platform: ${t.message}")
         } catch (t: NoClassDefFoundError) {
@@ -93,8 +98,8 @@ class RomArchiveReader(private val openAsset: (String) -> InputStream) {
         onProgress: (RomInstallProgress) -> Unit,
     ): RomArchiveExtractionResult {
         openAsset(candidate.archiveAssetPath).use { input ->
-            ZstdCompressorInputStream(input.buffered()).use { zstd ->
-                TarArchiveInputStream(zstd).use { tar ->
+            zstd.decompress(input).use { decompressed ->
+                TarArchiveInputStream(decompressed).use { tar ->
                     while (true) {
                         val entry = tar.nextTarEntry ?: break
                         val relative = normalizeEntryName(entry.name)

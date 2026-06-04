@@ -31,7 +31,7 @@ class RomArchiveReaderTest {
             "rootfs/vendor/.keep" to "",
         )
         val destination = tempDir("extract-rootfs")
-        val reader = RomArchiveReader { ByteArrayInputStream(archive) }
+        val reader = RomArchiveReader(openAsset = { ByteArrayInputStream(archive) })
 
         val result = reader.extract(debugCandidate(), destination) {}
 
@@ -49,7 +49,7 @@ class RomArchiveReaderTest {
         val archive = zipBytes("../escape.txt" to "escaped")
         val destination = tempDir("zip-slip-rootfs")
         val outside = File(destination.parentFile, "escape.txt")
-        val reader = RomArchiveReader { ByteArrayInputStream(archive) }
+        val reader = RomArchiveReader(openAsset = { ByteArrayInputStream(archive) })
 
         val result = reader.extract(debugCandidate(), destination) {}
 
@@ -61,7 +61,7 @@ class RomArchiveReaderTest {
     fun extract_reportsUnsupportedForUnknownFormat() {
         // tar.zst is now supported (see RomArchiveReaderTarZstTest); only genuinely
         // unknown formats fall through to Unsupported.
-        val reader = RomArchiveReader { ByteArrayInputStream(ByteArray(0)) }
+        val reader = RomArchiveReader(openAsset = { ByteArrayInputStream(ByteArray(0)) })
 
         val result = reader.extract(debugCandidate(format = "rar"), tempDir("rar-rootfs")) {}
 

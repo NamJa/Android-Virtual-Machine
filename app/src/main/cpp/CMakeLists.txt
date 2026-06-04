@@ -66,7 +66,23 @@ set(AVM_SYSCALL_SOURCES
 set(AVM_JNI_SOURCES
     jni/vm_native_bridge.cpp
     jni/phase_b_bridge.cpp
+    jni/zstd_bridge.cpp
 )
+
+# EP8.3 — on-device zstd via NDK-built libzstd (pinned). Provides libzstd_static.
+include(FetchContent)
+FetchContent_Declare(
+    zstd
+    GIT_REPOSITORY https://github.com/facebook/zstd.git
+    GIT_TAG v1.5.6
+    SOURCE_SUBDIR build/cmake
+)
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zstd)
 
 # EP1/EP2 spikes — capability probe, linker bootstrap, seccomp SIGSYS gateway.
 set(AVM_SPIKE_SOURCES
@@ -90,7 +106,7 @@ set(AVM_SOURCES
 
 add_library(avm_host SHARED ${AVM_SOURCES})
 
-target_include_directories(avm_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(avm_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${zstd_SOURCE_DIR}/lib)
 
 find_library(android-lib android)
 find_library(aaudio-lib aaudio)
@@ -98,6 +114,7 @@ find_library(log-lib log)
 
 target_link_libraries(
     avm_host
+    libzstd_static
     ${android-lib}
     ${aaudio-lib}
     ${log-lib}
