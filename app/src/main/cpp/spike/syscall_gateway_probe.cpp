@@ -14,6 +14,7 @@
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -80,6 +81,74 @@ Java_dev_jongwoo_androidvm_vm_SyscallGatewayProbe_nativeProbe(JNIEnv* env, jclas
     const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
     std::string json = "{\"ok\":true," + body +
+        ",\"child_signal\":" + std::to_string(sig) +
+        ",\"child_exit\":" + std::to_string(code) + "}";
+    return env->NewStringUTF(json.c_str());
+}
+
+// EP2.6 — VFS openat servicing PoC. Parent stages a file in a test rootfs; the
+// child (under the VFS gateway) opens the GUEST path, which is trapped, rewritten
+// into the rootfs, re-issued via the trusted stub, and read back.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_jongwoo_androidvm_vm_SyscallGatewayProbe_nativeProbeVfs(
+    JNIEnv* env, jclass, jstring jRootfs) {
+    const char* rp = env->GetStringUTFChars(jRootfs, nullptr);
+    const std::string rootfs = rp ? rp : "";
+    if (rp) env->ReleaseStringUTFChars(jRootfs, rp);
+
+    // Parent (not under seccomp): stage <rootfs>/system/hello.txt = "VFS-OK".
+    mkdir(rootfs.c_str(), 0700);
+    const std::string sysDir = rootfs + "/system";
+    mkdir(sysDir.c_str(), 0700);
+    const std::string realFile = sysDir + "/hello.txt";
+    {
+        const int fd = open(realFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) return env->NewStringUTF("{\"ok\":false,\"reason\":\"stage_failed\"}");
+        const char* data = "VFS-OK";
+        (void)!write(fd, data, 6);
+        close(fd);
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return env->NewStringUTF("{\"ok\":false,\"reason\":\"pipe_failed\"}");
+    const pid_t pid = fork();
+    if (pid < 0) return env->NewStringUTF("{\"ok\":false,\"reason\":\"fork_failed\"}");
+    if (pid == 0) {
+        close(pipefd[0]);
+        const bool installed = avm::guest::installGuestVfsGateway(rootfs.c_str());
+        // Open the GUEST path (absolute, as the guest sees it) -> trapped + rewritten.
+        const int fd = openat(AT_FDCWD, "/system/hello.txt", O_RDONLY);
+        char content[32];
+        std::memset(content, 0, sizeof(content));
+        ssize_t rd = -1;
+        if (fd >= 0) {
+            rd = read(fd, content, sizeof(content) - 1);
+            close(fd);
+        }
+        char buf[256];
+        const int n = snprintf(
+            buf, sizeof(buf),
+            "\"gateway_installed\":%s,\"open_fd_nonneg\":%s,\"read_bytes\":%zd,"
+            "\"content\":\"%s\",\"serviced\":%d",
+            installed ? "true" : "false", fd >= 0 ? "true" : "false", rd,
+            content, avm::guest::guestGatewayServicedCount());
+        if (n > 0) (void)!write(pipefd[1], buf, static_cast<size_t>(n));
+        close(pipefd[1]);
+        _exit(0);
+    }
+
+    close(pipefd[1]);
+    std::string body;
+    char buf[256];
+    ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) body.append(buf, static_cast<size_t>(n));
+    close(pipefd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    const int sig = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    std::string json = "{\"ok\":true,\"vfs\":true," + body +
         ",\"child_signal\":" + std::to_string(sig) +
         ",\"child_exit\":" + std::to_string(code) + "}";
     return env->NewStringUTF(json.c_str());

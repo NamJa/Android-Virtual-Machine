@@ -19,6 +19,15 @@ namespace avm::guest {
  */
 bool installGuestSyscallGateway(bool extended);
 
+/**
+ * EP2.6 — installs the VFS variant: TRAPs `openat` to a SIGSYS handler that
+ * rewrites the guest path into `rootfs` (GuestPathRewrite) and re-issues the real
+ * openat via a trusted raw-syscall stub. The BPF allows syscalls whose
+ * instruction pointer is inside that stub's code range, so the handler's own
+ * openat is not re-trapped (no recursion). Returns the fd to the guest.
+ */
+bool installGuestVfsGateway(const char* rootfs);
+
 /** Number of syscalls serviced by the SIGSYS handler in this process so far. */
 int guestGatewayServicedCount();
 

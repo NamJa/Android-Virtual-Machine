@@ -23,6 +23,15 @@ object SyscallGatewayProbe {
         return nativeProbe()
     }
 
+    /** EP2.6 openat servicing PoC: stages a file under [rootfs] and opens the guest path. */
+    fun probeVfs(rootfs: String): String {
+        ensureLoaded()
+        return nativeProbeVfs(rootfs)
+    }
+
     @JvmStatic
     external fun nativeProbe(): String
+
+    @JvmStatic
+    external fun nativeProbeVfs(rootfs: String): String
 }

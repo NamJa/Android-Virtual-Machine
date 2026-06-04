@@ -49,6 +49,7 @@ set(AVM_LOADER_SOURCES
     loader/linker_bridge.cpp
     loader/guest_process.cpp
     loader/initial_stack.cpp
+    loader/guest_path.cpp
 )
 
 set(AVM_SYSCALL_SOURCES
