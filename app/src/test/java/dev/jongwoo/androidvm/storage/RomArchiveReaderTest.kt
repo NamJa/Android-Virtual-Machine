@@ -58,10 +58,12 @@ class RomArchiveReaderTest {
     }
 
     @Test
-    fun extract_reportsUnsupportedTarZstForMvp() {
+    fun extract_reportsUnsupportedForUnknownFormat() {
+        // tar.zst is now supported (see RomArchiveReaderTarZstTest); only genuinely
+        // unknown formats fall through to Unsupported.
         val reader = RomArchiveReader { ByteArrayInputStream(ByteArray(0)) }
 
-        val result = reader.extract(debugCandidate(format = "tar.zst"), tempDir("tar-zst-rootfs")) {}
+        val result = reader.extract(debugCandidate(format = "rar"), tempDir("rar-rootfs")) {}
 
         assertTrue(result is RomArchiveExtractionResult.Unsupported)
     }

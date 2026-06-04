@@ -72,6 +72,13 @@ android {
         resources.excludes += setOf(
             "META-INF/AL2.0",
             "META-INF/LGPL2.1",
+            // zstd-jni bundles desktop natives (used only by JVM unit tests). They
+            // are not Android-loadable; drop them so they don't bloat the APK. The
+            // on-device zstd path is a NDK libzstd follow-up (EP8.3).
+            "darwin/**",
+            "win/**",
+            "freebsd/**",
+            "linux/**",
         )
     }
 }
@@ -88,6 +95,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // EP8.3: tar.zst guest ROM extraction (symlinks + perms + large rootfs).
+    implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("com.github.luben:zstd-jni:1.5.6-8")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

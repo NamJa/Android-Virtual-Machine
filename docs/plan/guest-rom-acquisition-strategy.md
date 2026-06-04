@@ -31,7 +31,7 @@
 - **RootfsHealthCheck 필수 항목**(`storage/RootfsHealthCheck.kt`): `system/build.prop`, `system/bin/app_process64`, `system/bin/servicemanager`, `system/bin/sh`, `system/framework`, `vendor`, `data`, `cache` (+ `data`/`cache` writable + image manifest marker). → **실제 부팅용으로 `system/bin/linker64`, `system/lib64/libc.so` 추가 필요**(EP2 전제).
 - **manifest 스키마**(`assets/guest/*.manifest.json`): `name, guestVersion, guestArch, format, compressedSize, uncompressedSize, sha256, createdAt, minHostSdk`.
 - **AssetVerifier**: sha256 + min-host-SDK + format allowlist `{zip, tar.zst}`.
-- **RomArchiveReader**: zip 실구현, **`tar.zst`는 현재 stub(`Unsupported`)** → 실제 ROM은 symlink·실행권한·대용량 때문에 zip 부적합, **tar.zst 필수** → **EP8.3(tar.zst 구현)이 선결**.
+- **RomArchiveReader**: zip 실구현. **`tar.zst`는 추출 로직 구현 완료**(EP8.3 — commons-compress tar 파싱 + symlink·하드링크·실행권한·traversal 방어, JVM 6/6 테스트). 단 zstd 압축해제는 현재 `zstd-jni`(JVM/호스트 전용 네이티브) 기반이라 **on-device zstd 네이티브는 미해결** → NDK libzstd 통합이 Android 런타임 해법(후속). 네이티브 부재 시 graceful `Failed` 처리(크래시 없음).
 - 디버그 fixture 생성기: `tools/create_debug_guest_fixture.sh` (NDK로 avm-hello 빌드 + zip).
 
 ## 4. 소싱 옵션과 권고
@@ -77,7 +77,7 @@ ROM 확보 후, 시뮬레이션 부팅을 실제 부팅으로 대체:
 
 ## 8. 선결 의존성 (착수 순서)
 
-1. **EP8.3 tar.zst 추출 구현** (`RomArchiveReader`) — 실제 ROM 포맷 전제.
+1. **EP8.3 tar.zst 추출 구현** — ✅ 호스트 로직 완료(tar 파싱·symlink·권한·traversal, JVM 테스트). ⬜ 잔여: on-device zstd 네이티브(NDK libzstd) 통합.
 2. **RootfsHealthCheck 확장** (linker64/libc 필수화).
 3. **`tools/build_aosp_guest_rom.sh`** + Docker 빌드환경 문서.
 4. **EP8.2 Ed25519 import 연결** (서명 ROM).
