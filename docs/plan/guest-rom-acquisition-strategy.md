@@ -28,7 +28,7 @@
 
 ## 3. 기존 ROM 파이프라인 제약 (코드 근거)
 
-- **RootfsHealthCheck 필수 항목**(`storage/RootfsHealthCheck.kt`): `system/build.prop`, `system/bin/app_process64`, `system/bin/servicemanager`, `system/bin/sh`, `system/framework`, `vendor`, `data`, `cache` (+ `data`/`cache` writable + image manifest marker). → **실제 부팅용으로 `system/bin/linker64`, `system/lib64/libc.so` 추가 필요**(EP2 전제).
+- **RootfsHealthCheck**(`storage/RootfsHealthCheck.kt`): 구조 `ok` 필수 항목(`system/build.prop`, `system/bin/app_process64`, `servicemanager`, `sh`, `system/framework`, `vendor`, `data`, `cache` + writable + marker) **유지** + **신규 `bootReady` 신호**(완료): `linker64`·`libc.so`·`app_process64`가 실제 arm64 ELF인지 검증. placeholder fixture는 `ok`지만 `!bootReady`, 실제 AOSP rootfs만 `bootReady`. 실제 부팅 경로(§7)는 `bootReady`를 전제로 한다.
 - **manifest 스키마**(`assets/guest/*.manifest.json`): `name, guestVersion, guestArch, format, compressedSize, uncompressedSize, sha256, createdAt, minHostSdk`.
 - **AssetVerifier**: sha256 + min-host-SDK + format allowlist `{zip, tar.zst}`.
 - **RomArchiveReader**: zip 실구현 + **`tar.zst` 구현 완료**(EP8.3): commons-compress tar 파싱(symlink·하드링크·실행권한·traversal 방어, JVM 6/6) + **NDK libzstd(FetchContent v1.5.6, 3 ABI)로 on-device 압축해제** — 에뮬레이터(API 29)에서 `Extracted, build_prop=zstd-native-ok, linker_exec=true, symlink=true` 실증. 디컴프레서는 주입식(`ZstdDecompressor`): Android=NDK libzstd, JVM 테스트=zstd-jni. 데스크톱 zstd-jni 네이티브는 APK에서 제외.
@@ -78,7 +78,7 @@ ROM 확보 후, 시뮬레이션 부팅을 실제 부팅으로 대체:
 ## 8. 선결 의존성 (착수 순서)
 
 1. **EP8.3 tar.zst 추출 구현** — ✅ 완료(호스트 로직 + NDK libzstd on-device 실증, API 29). 다음 선결로 진행.
-2. **RootfsHealthCheck 확장** (linker64/libc 필수화).
+2. **RootfsHealthCheck 확장** — ✅ 완료. `ok`(구조)와 별개로 `bootReady` 신호 추가: `system/bin/linker64`·`system/lib64/libc.so`·`system/bin/app_process64`가 실제 arm64 ELF인지 검증(ELF magic+class64+EM_AARCH64). placeholder fixture=ok·!bootReady, 실제 AOSP=bootReady. 기존 진단 무영향(JVM 6/6).
 3. **`tools/build_aosp_guest_rom.sh`** + Docker 빌드환경 문서.
 4. **EP8.2 Ed25519 import 연결** (서명 ROM).
 5. 그 다음 §7 VmInstanceService 통합 → 실제 부팅 시도 → EP3.

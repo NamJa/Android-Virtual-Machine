@@ -56,8 +56,67 @@ class RootfsHealthCheckTest {
         assertTrue(result.markerMissing)
     }
 
+    @Test
+    fun check_placeholderRootfsIsHealthyButNotBootReady() {
+        val rootfs = tempDir("placeholder-rootfs")
+        createHealthyRootfs(rootfs) // shell-script binaries, no real ELFs
+
+        val result = healthCheck.check(rootfs, null)
+
+        assertTrue(result.ok)
+        assertFalse(result.bootReady)
+        assertTrue(result.bootReadyMissing.contains("system/bin/linker64"))
+        assertTrue(result.bootReadyMissing.contains("system/lib64/libc.so"))
+        assertTrue(result.bootReadyMissing.contains("system/bin/app_process64"))
+    }
+
+    @Test
+    fun check_realArm64ElfRootfsIsBootReady() {
+        val rootfs = tempDir("bootready-rootfs")
+        createHealthyRootfs(rootfs)
+        writeArm64Elf(File(rootfs, "system/bin/linker64"))
+        writeArm64Elf(File(rootfs, "system/lib64/libc.so"))
+        writeArm64Elf(File(rootfs, "system/bin/app_process64")) // overwrite placeholder
+
+        val result = healthCheck.check(rootfs, null)
+
+        assertTrue(result.ok)
+        assertTrue(result.bootReadySummary, result.bootReady)
+        assertTrue(result.bootReadyMissing.isEmpty())
+    }
+
+    @Test
+    fun bootReadyRejectsWrongMachine() {
+        val rootfs = tempDir("wrongelf-rootfs")
+        createHealthyRootfs(rootfs)
+        writeArm64Elf(File(rootfs, "system/lib64/libc.so"))
+        writeArm64Elf(File(rootfs, "system/bin/app_process64"))
+        // Valid ELF64 magic but x86_64 (EM_X86_64 = 0x3E), not arm64.
+        File(rootfs, "system/bin/linker64").apply {
+            val b = ByteArray(64)
+            b[0] = 0x7f; b[1] = 'E'.code.toByte(); b[2] = 'L'.code.toByte(); b[3] = 'F'.code.toByte()
+            b[4] = 2; b[18] = 0x3E
+            writeBytes(b)
+        }
+
+        val result = healthCheck.check(rootfs, null)
+        assertFalse(result.bootReady)
+        assertTrue(result.bootReadyMissing.contains("system/bin/linker64"))
+    }
+
     private fun tempDir(prefix: String): File {
         return Files.createTempDirectory(prefix).toFile().also { tempDirs += it }
+    }
+
+    private fun writeArm64Elf(file: File) {
+        file.parentFile?.mkdirs()
+        val b = ByteArray(64)
+        b[0] = 0x7f; b[1] = 'E'.code.toByte(); b[2] = 'L'.code.toByte(); b[3] = 'F'.code.toByte()
+        b[4] = 2 // ELFCLASS64
+        b[5] = 1 // little-endian
+        b[16] = 3 // ET_DYN
+        b[18] = 0xB7.toByte() // EM_AARCH64
+        file.writeBytes(b)
     }
 
     private fun createHealthyRootfs(rootfs: File) {
