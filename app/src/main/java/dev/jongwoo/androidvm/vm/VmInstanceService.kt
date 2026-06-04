@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
+import android.util.Log
 import dev.jongwoo.androidvm.R
 
 open class VmInstanceService : Service() {
@@ -124,6 +125,14 @@ open class VmInstanceService : Service() {
         }
 
         val config = preflight.config
+
+        // Boot integration (guest-rom strategy §7): choose the real Option B boot only
+        // for a boot-ready ROM with the feature flag on; otherwise the labeled simulated
+        // path. Flag is off until the native real-boot path + a clean-room ROM land, so
+        // this is observable but non-behavioral today.
+        val bootMode = GuestBootPolicy.select(preflight.snapshot.health.bootReady)
+        Log.i(TAG, "guest boot mode=$bootMode bootReady=${preflight.snapshot.health.bootReady}")
+
         val nativeState = NativeRuntimeState.fromCode(VmNativeBridge.getInstanceState(config.instanceId))
         if (nativeState == NativeRuntimeState.RUNNING) {
             setState(VmState.RUNNING)
@@ -223,6 +232,7 @@ open class VmInstanceService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_START = "dev.jongwoo.androidvm.action.START_VM"
         private const val ACTION_STOP = "dev.jongwoo.androidvm.action.STOP_VM"
+        private const val TAG = "AVM.VmInstance"
         private const val ACTION_IMPORT_APK = "dev.jongwoo.androidvm.action.IMPORT_APK"
         private const val ACTION_LAUNCH_PACKAGE = "dev.jongwoo.androidvm.action.LAUNCH_PACKAGE"
         private const val ACTION_STOP_PACKAGE = "dev.jongwoo.androidvm.action.STOP_PACKAGE"
