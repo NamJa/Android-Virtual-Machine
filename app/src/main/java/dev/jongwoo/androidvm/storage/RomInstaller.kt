@@ -5,7 +5,10 @@ import android.os.Build
 import dev.jongwoo.androidvm.vm.VmConfig
 import java.io.File
 
-class RomInstaller(private val context: Context) {
+class RomInstaller(
+    private val context: Context,
+    private val signaturePolicy: RomSignaturePolicy = RomSignaturePolicy.bundledDev(),
+) {
     private val paths = PathLayout(context)
     private val healthCheck = RootfsHealthCheck()
     private val archiveReader = RomArchiveReader(context)
@@ -131,6 +134,21 @@ class RomInstaller(private val context: Context) {
             }
 
             val instancePaths = paths.ensureInstance(instanceId)
+
+            // EP8.2: signed images must pass Ed25519 verification before any extract/commit.
+            val signatureVerdict = signaturePolicy.gate(
+                candidate.manifest,
+                readInstalledManifest(instancePaths),
+            )
+            if (!signatureVerdict.ok) {
+                return RomInstallResult(
+                    status = RomInstallStatus.SIGNATURE_REJECTED,
+                    message = signatureVerdict.message,
+                    manifest = candidate.manifest,
+                    verification = verification,
+                )
+            }
+
             val stagingRoot = File(instancePaths.stagingDir, "install-${System.currentTimeMillis()}")
             stagingRootRef = stagingRoot
             val stagingRootfs = File(stagingRoot, "rootfs")

@@ -130,3 +130,49 @@ class RomUpdateChannel(
                 "consent_gate=on channel=offline network_fetch=off auto_update=off telemetry=off"
     }
 }
+
+/**
+ * EP8.2 — the signature gate the install flow consults before extracting/committing a rootfs.
+ *
+ * - Unsigned manifests: accepted only when [requireSignature] is false (bundled dev/debug ROM);
+ *   the offline user-import path uses [ed25519Import] with requireSignature = true.
+ * - Signed manifests: require a configured trust anchor (verifier + expectedPublicKeyId) and must
+ *   pass [RomUpdateChannel] verification (Ed25519 signature + monotonic patch level). Fail-closed:
+ *   a signed image with no trust anchor is rejected.
+ */
+class RomSignaturePolicy(
+    private val verifier: SignatureVerifier? = null,
+    private val expectedPublicKeyId: String? = null,
+    private val requireSignature: Boolean = false,
+) {
+    fun gate(manifest: RomImageManifest, installedManifest: RomImageManifest?): RomUpdateVerdict {
+        if (manifest.signature == null) {
+            return if (requireSignature) {
+                RomUpdateVerdict.Rejected("unsigned_image_rejected")
+            } else {
+                RomUpdateVerdict.Accepted(
+                    manifest = manifest,
+                    newPatchLevel = manifest.patchLevel,
+                    previousPatchLevel = installedManifest?.patchLevel ?: -1,
+                )
+            }
+        }
+        if (verifier == null || expectedPublicKeyId == null) {
+            return RomUpdateVerdict.Rejected("signed_image_without_trust_anchor")
+        }
+        return RomUpdateChannel(verifier, expectedPublicKeyId).verify(manifest, installedManifest)
+    }
+
+    companion object {
+        /** Bundled dev/debug ROM: unsigned images allowed; signed ones still verified if anchored. */
+        fun bundledDev(): RomSignaturePolicy = RomSignaturePolicy()
+
+        /** Offline user import: signature required and verified with Ed25519 against [publicKey]. */
+        fun ed25519Import(publicKey: ByteArray, publicKeyId: String): RomSignaturePolicy =
+            RomSignaturePolicy(
+                verifier = Ed25519SignatureVerifier(publicKey),
+                expectedPublicKeyId = publicKeyId,
+                requireSignature = true,
+            )
+    }
+}
