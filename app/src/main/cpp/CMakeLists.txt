@@ -84,11 +84,17 @@ set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zstd)
 
-# EP1/EP2 spikes — capability probe, linker bootstrap, seccomp SIGSYS gateway.
+# EP2 production guest-boot core (graduated from the spikes): seccomp SIGSYS
+# gateway + the linker bootstrap (map -> stack/auxv -> fork -> gateway -> jump).
+set(AVM_GUEST_SOURCES
+    guest/syscall_gateway.cpp
+    guest/guest_boot.cpp
+)
+
+# EP1/EP2 spikes — on-device probes; thin wrappers over the guest/ core.
 set(AVM_SPIKE_SOURCES
     spike/guest_exec_probe.cpp
     spike/linker_bootstrap_probe.cpp
-    spike/syscall_gateway.cpp
     spike/syscall_gateway_probe.cpp
 )
 
@@ -101,6 +107,7 @@ set(AVM_SOURCES
     ${AVM_LOADER_SOURCES}
     ${AVM_SYSCALL_SOURCES}
     ${AVM_JNI_SOURCES}
+    ${AVM_GUEST_SOURCES}
     ${AVM_SPIKE_SOURCES}
 )
 

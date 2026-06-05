@@ -33,14 +33,12 @@ startRuntime(instanceId)
 
 flag=on & bootReady일 때 `startGuest`가 시뮬레이션 대신 **Option B 실부팅**을 수행:
 
-1. **spike → production 승격**: `spike/{linker_bootstrap_probe, syscall_gateway, syscall_gateway_probe}` + `loader/initial_stack` + `loader/guest_path`의 검증된 코드를 `guest/`(프로덕션) 모듈로 승격. probe receiver는 debug 유지, 부팅 로직만 추출.
-2. **native 실부팅 진입점**(현 `phaseBGuestRuntimeEntrypoint` 대체, REAL 모드에서만):
-   - rootfs의 `/system/bin/linker64` + `app_process64`(또는 init) 매핑(`mapElf64`)
-   - `buildInitialStack`로 argc/argv/envp/auxv 구성(AT_BASE=linker, AT_ENTRY/AT_PHDR=exec)
-   - fork child에서 `installGuestVfsGateway(rootfs)`(seccomp SIGSYS + openat 서비싱) → `jumpToGuestEntry`
-   - 게이트웨이가 게스트 syscall을 rootfs로 라우팅(VFS/property/binder) → 게스트가 부팅
+1. **spike → production 승격** ✅ 완료: 게이트웨이 `guest/syscall_gateway.{h,cpp}`(spike→guest 이동) + 부팅 코어 `guest/guest_boot.{h,cpp}`의 `bootGuestViaLinker(rootfs, exec, linker, GatewayMode, timeout)`로 추출. spike 프로브(`linker_bootstrap_probe`, `syscall_gateway_probe`)는 이제 그 위의 **얇은 래퍼**(debug 유지) — on-device 재검증으로 동작 보존 확인(API 36: `linker_ran=true`, VFS `content=VFS-OK`). `loader/initial_stack`·`loader/guest_path`는 이미 프로덕션.
+2. **native 실부팅 진입점**(현 `phaseBGuestRuntimeEntrypoint` 대체, REAL 모드에서만): `bootGuestViaLinker(rootfs, rootfs+"/system/bin/app_process64", rootfs+"/system/bin/linker64", GatewayMode::VFS, ...)` 호출.
+   - `mapElf64`로 매핑 + `buildInitialStack`로 auxv(AT_BASE=linker, AT_ENTRY/AT_PHDR=exec) + fork child에서 `installGuestVfsGateway(rootfs)` → `jumpToGuestEntry`. (모두 `bootGuestViaLinker` 안에 구현됨)
+   - 게이트웨이가 게스트 syscall을 rootfs로 라우팅 → 게스트 부팅.
 3. **부팅 마커는 게스트 출처**(EP3.7): `runtime_mode=simulated` 미설정 → `synthetic=0`. `GuestBootStatus.isRealGuestBoot()` → true.
-4. **JNI 계약**: `initInstance` config JSON에 `bootMode`(SIMULATED|REAL) 추가 → native가 분기. (또는 `startGuest(instanceId, real)` 시그니처 확장.)
+4. **JNI 계약**: `initInstance` config JSON에 `bootMode`(SIMULATED|REAL) 추가 → native가 분기해 REAL이면 `bootGuestViaLinker` 호출. (잔여: native 분기 wiring + flag on.)
 
 ## 3. EP2 → EP3 핸드오프
 

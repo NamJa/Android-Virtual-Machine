@@ -19,7 +19,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "spike/syscall_gateway.h"
+#include "guest/syscall_gateway.h"
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_jongwoo_androidvm_vm_SyscallGatewayProbe_nativeProbe(JNIEnv* env, jclass) {

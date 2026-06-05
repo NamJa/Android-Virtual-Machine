@@ -1,4 +1,4 @@
-#include "spike/syscall_gateway.h"
+#include "guest/syscall_gateway.h"
 
 #include <cerrno>
 #include <cstddef>
