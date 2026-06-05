@@ -1,7 +1,8 @@
 # 실제 제품 구현 — 실행 Phase 체계 (Step-by-Step)
 
-> 작성일: 2026-06-02
+> 작성일: 2026-06-02 · **갱신: 2026-06-05** (진행 현황 + 잔여 재정립 — §1.5)
 > 상위 문서: [`production-implementation-plan.md`](./production-implementation-plan.md)
+> 관련: [`guest-rom-acquisition-strategy.md`](./guest-rom-acquisition-strategy.md) · [`vm-boot-integration-design.md`](./vm-boot-integration-design.md)
 > 목적: 상위 plan의 **모든 작업**(M0 / GUEST_ARCH_DECISION / G1–G3 / M4–M9 / 통합 검증)을 **실행 Phase(Execution Phase, EP)** 단위로 변환하고, 각 Phase를 순서가 있는 Step-by-Step으로 상세화한다. 이 문서는 "무엇을 어떤 순서로 어떻게 하고 무엇으로 완료를 판정하는가"를 다룬다.
 
 ---
@@ -32,20 +33,22 @@
 
 ## 1. EP 전체 개요와 의존 관계
 
-| EP | 이름 | 매핑 | 트랙 | 선행 | 병렬 가능 |
-| --- | --- | --- | --- | --- | --- |
-| **EP0** | Verification Harness & Truth Reset | M0 (P0+P1+P8부분) | P | — | — |
-| **EP1** | Guest Architecture Decision (Spike) | GUEST_ARCH_DECISION | G | EP0 | — |
-| **EP2** | Real Guest Execution Core | G1 | G | EP1 | EP8·EP7 일부 |
-| **EP3** | System Services Boot | G2 | G | EP2 | EP8·EP7 일부 |
-| **EP4** | Real APK Launch | G3 | G | EP3 | — |
-| **EP5** | Graphics / Input / Media | M4 (P3) | P | EP4 | EP6 |
-| **EP6** | Bridge / Privacy 완성 | M5 (P4) | P | EP4 | EP5 |
-| **EP7** | Storage / Snapshot / Data Safety | M6 (P5) | P | EP3 | EP2~EP4와 병렬 |
-| **EP8** | Security / Updates | M7 (P6) | P | EP0 | EP2~EP4와 병렬 |
-| **EP9** | Product UX | M8 (P7) | P | EP4~EP8 | — |
-| **EP10** | Release Engineering | M9 (P8) | P | EP9 | — |
-| **EP11** | Integration & Release Candidate | 통합 검증 + RC | — | EP1~EP10 | — |
+> 현황(2026-06-05): ✅완료 🟡부분 ⬜미착수 — 상세는 §1.5.
+
+| EP | 이름 | 현황 | 매핑 | 트랙 | 선행 | 병렬 가능 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **EP0** | Verification Harness & Truth Reset | ✅ | M0 (P0+P1+P8부분) | P | — | — |
+| **EP1** | Guest Architecture Decision (Spike) | ✅ | GUEST_ARCH_DECISION | G | EP0 | — |
+| **EP2** | Real Guest Execution Core | 🟡 | G1 | G | EP1 | EP8·EP7 일부 |
+| **EP3** | System Services Boot | ⬜ | G2 | G | EP2 | EP8·EP7 일부 |
+| **EP4** | Real APK Launch | ⬜ | G3 | G | EP3 | — |
+| **EP5** | Graphics / Input / Media | ⬜ | M4 (P3) | P | EP4 | EP6 |
+| **EP6** | Bridge / Privacy 완성 | ⬜ | M5 (P4) | P | EP4 | EP5 |
+| **EP7** | Storage / Snapshot / Data Safety | ⬜ | M6 (P5) | P | EP3 | EP2~EP4와 병렬 |
+| **EP8** | Security / Updates | 🟡 | M7 (P6) | P | EP0 | EP2~EP4와 병렬 |
+| **EP9** | Product UX | ⬜ | M8 (P7) | P | EP4~EP8 | — |
+| **EP10** | Release Engineering | ⬜ | M9 (P8) | P | EP9 | — |
+| **EP11** | Integration & Release Candidate | ⬜ | 통합 검증 + RC | — | EP1~EP10 | — |
 
 ```
 EP0 ──► EP1 ──► EP2 ──► EP3 ──► EP4 ──┬──► EP5 ─┐
@@ -60,7 +63,55 @@ EP0 ──► EP1 ──► EP2 ──► EP3 ──► EP4 ──┬──► E
 
 ---
 
-## EP0 — Verification Harness & Truth Reset
+## 1.5 진행 현황 및 잔여 재정립 (2026-06-05)
+
+> 범례: ✅ 완료 · 🟡 부분/메커니즘 실증(제품 게이트 미충족) · ⬜ 미착수. 모든 실증은 에뮬레이터(arm64 API 29/36) + JVM 테스트 기준이며, 실기기/ROM 의존 항목은 별도 표기.
+
+### 1.5.1 EP별 현황
+
+| EP | 상태 | 근거(커밋/검증) |
+| --- | --- | --- |
+| EP0 하네스/진실성 | ✅ | product variant·`ProductGateRunner`(fail-closed)·`ProductE2eRunner`·`FailureBundle`·CI fast+nightly·`ep0-gate-semantics` (`53fa7d1`) |
+| EP1 아키텍처 결정 | ✅ | **Option B 확정** — probe `option_b_viable=true` (API 29/35) (`ed0bd57`, `df8ccc2`) |
+| EP2 게스트 실행 코어 | 🟡 메커니즘 전부 실증 / **G1 미완** | 2.1✅ 2.2✅ 2.3✅ 2.4✅ 2.5✅ 2.6✅ 2.7🟡 2.8✅ (`2ca5dda`,`1d1a0b1`,`13d3663`,`661c5ae`,`ade2074`) — 단 **클린룸 ROM 실부팅 통합 미완** |
+| EP8 보안/업데이트 | 🟡 부분 | 8.2✅(Ed25519 게이트, API<33 후속) 8.3✅(tar.zst + NDK libzstd, on-device) (`9fcb7d4`,`d63e7f9`,`b544489`) / 8.1·8.4·8.5·8.6·8.7·8.8 ⬜ |
+| EP3 시스템 부팅 | ⬜ | 게이트웨이 위에서 시작(EP2 통합 후) |
+| EP4 APK 실행 | ⬜ | |
+| EP5 그래픽/입력/미디어 | ⬜ | (브리지 일부는 EP6에서 실제화) |
+| EP6 브리지/프라이버시 | ⬜ | |
+| EP7 데이터 안전 | ⬜ | (호스트 측 — G-track과 병렬 가능) |
+| EP9 UX / EP10 릴리스 / EP11 통합 | ⬜ | |
+
+### 1.5.2 세션 중 추가된(원 plan 외) 산출물 — 모두 **G1 선결/접합부**
+
+| 산출물 | 역할 | 커밋 |
+| --- | --- | --- |
+| `RootfsHealthCheck.bootReady` | 실부팅 전제(linker64/libc/app_process64가 arm64 ELF) 신호 | `8ce1df5` |
+| `tools/build_aosp_guest_rom.sh` | 클린룸 AOSP arm64 ROM → tar.zst+manifest 빌더 | `03eac86` |
+| `GuestBootPolicy` + startRuntime 배선 | bootReady+flag 기반 boot-mode 게이트(on-device 실증) | `a97561f` |
+| `guest/{syscall_gateway,guest_boot}` + `bootGuestViaLinker` | spike→production 승격(REAL 부팅 코어) | `ade2074` |
+| `guest-rom-acquisition-strategy.md`, `vm-boot-integration-design.md` | ROM 확보 + 실부팅 통합 설계 | — |
+
+### 1.5.3 잔여 재정립 — G1(`passed=true`)까지의 임계 경로
+
+EP2의 "메커니즘"은 모두 실증됐다. G1의 잔여는 **메커니즘이 아니라 "클린룸 ROM이 end-to-end로 실제 부팅"** 이다. 이를 닫는 임계 경로:
+
+1. **(선결) 클린룸 AOSP arm64 ROM 생성** — `build_aosp_guest_rom.sh`로 빌드(도구 준비 완료) → `bootReady=true`. *유일하게 도구 밖 인프라(Docker AOSP 빌드)가 필요한 항목.*
+2. **EP2.9 (신규) — REAL 부팅 wiring** (아래 EP2에 추가): `initInstance` config에 `bootMode` 전달 → native가 REAL이면 `phaseBGuestRuntimeEntrypoint`(시뮬레이션) 대신 `bootGuestViaLinker(rootfs, .../linker64, GatewayMode::VFS, …)` 호출 → `synthetic=0`, 게스트 출처 마커. **코어(`bootGuestViaLinker`)는 승격 완료, native 분기 + JNI 계약만 잔여.**
+3. **`REAL_GUEST_BOOT_ENABLED=true`** (`GuestBootPolicy`) — flag 1개.
+4. EP2.7(/proc·/sys 폭) + 서비싱 폭(binder ioctl/property/socket)은 **EP3와 함께 점증** — G1 최소 부팅엔 linker→libc→app_process 도달이면 충분, 전체 서비싱은 EP3/4에서 확장.
+
+→ 위 1–3이 G1을 닫고, 그 위에서 **EP3(시스템 서비스 부팅) → EP4(APK 실행)** 가 선형으로 이어진다.
+
+### 1.5.4 권장 다음 순서
+
+- **G-track**: EP2.9 wiring(flag off, 구조 완성) → 클린룸 ROM 생성 → flag on + 실부팅 실증(**G1**) → EP3 → EP4.
+- **병렬(호스트 측, ROM 무관)**: EP8 잔여(8.4 외부 ROM import / 8.1 stub 제거 / 8.6 offline-only 검증) + EP7(데이터 안전) — 인력 있으면 G-track과 동시 진행.
+- EP5/EP6/EP9는 EP4(실제 APK 실행) 이후 의미가 생기므로 그 전까지는 설계/스캐폴딩만.
+
+---
+
+## EP0 — Verification Harness & Truth Reset ✅ (완료)
 
 **Phase 목표**: 진척을 "canned가 아닌 실제"로 측정할 수 있는 release-equivalent 검증 기반을 갖추고, 문서/상태의 진실성을 정렬한다. 이후 모든 Phase의 합격 판정 도구.
 
@@ -122,7 +173,9 @@ PRODUCT_P1_VERIFICATION passed=true devices>=2 apk_corpus>=10 release_equivalent
 
 ---
 
-## EP1 — Guest Architecture Decision (Spike)
+## EP1 — Guest Architecture Decision (Spike) ✅ (Option B 확정)
+
+> 현황: probe가 API 29/35 arm64 에뮬레이터에서 `option_b_viable=true`(seccomp_trap + memfd/PROT_EXEC) → **Option B 채택**. `spike_oncreate_reached`는 EP2.2 부트스트랩(실제 linker가 app_process를 AndroidRuntime까지)으로 충족. 물리 기기 재확인은 권장 잔여.
 
 **Phase 목표**: G-track 착수 전, 게스트 실행 아키텍처를 PoC로 비교·결정한다. 이 결정이 전체 일정·리스크를 좌우하는 단일 변수.
 
@@ -163,11 +216,15 @@ GUEST_ARCH_DECISION passed=true approach={A|B|C} spike_oncreate_reached=true ris
 
 ---
 
-## EP2 — Real Guest Execution Core (G1)
+## EP2 — Real Guest Execution Core (G1) 🟡 (메커니즘 실증 / 통합 잔여)
+
+> 현황: EP2.1~2.8의 **메커니즘이 모두 에뮬레이터에서 실증**됐다(2.7만 부분). 다만 G1의 정의는 "클린룸 ROM end-to-end 실부팅"이며, 그 통합(**EP2.9**)과 ROM 확보가 잔여 → `G1_RESULT passed=false` 유지. 검증/제약은 [`ep2-guest-core-design.md`](./ep2-guest-core-design.md)·[`vm-boot-integration-design.md`](./vm-boot-integration-design.md).
 
 **Phase 목표**: 실제 동적 링커가 실제 ELF를 로드·재배치·실행하고, 호스트로 위임된 syscall이 진짜 부수효과를 낸다. **canned 상태 전면 제거.** 최대 난관.
 
 **선행**: EP1 결정. **산출물**: 실제 실행되는 게스트 코어.
+
+> 세부 진행: 2.1✅(시뮬레이션 라벨 격리) 2.2✅(실제 linker 부트스트랩, API29/36) 2.3✅(seccomp SIGSYS 게이트웨이) 2.4✅(실제 mmap) 2.5✅(TLS=프로세스 분리) 2.6✅(VFS openat IP-allow 서비싱) 2.7🟡(/proc 라우팅+self/exe) 2.8✅(clone ALLOW). 코어는 `guest/{syscall_gateway,guest_boot}`로 승격(`bootGuestViaLinker`).
 
 ### Steps
 
@@ -213,19 +270,27 @@ GUEST_ARCH_DECISION passed=true approach={A|B|C} spike_oncreate_reached=true ris
   - 검증: 게스트가 해당 경로 읽기 시 일관된 값.
   - DoD: linker/libc 초기화가 요구하는 proc 항목 충족.
 
-- **EP2.8 — 스레드 생성(clone) 지원**
+- **EP2.8 — 스레드 생성(clone) 지원** ✅
   - 작업: `clone`(thread variant) 지원, "tid==pid 단일 스레드" 가정 제거.
   - 대상: `syscall/process.cpp`.
-  - 검증: 게스트가 pthread 생성·조인.
+  - 검증: 게스트가 pthread 생성·조인. (probe `clone_thread=true` + 정책상 ALLOW)
   - DoD: 멀티스레드 게스트 코드 동작.
+
+- **EP2.9 — REAL 부팅 wiring (신규, G1 마무리)** ⬜
+  - 작업: 시뮬레이션 `phaseBGuestRuntimeEntrypoint`를 boot-mode 분기로 대체 — REAL이면 `bootGuestViaLinker(rootfs, rootfs+"/system/bin/app_process64", rootfs+"/system/bin/linker64", GatewayMode::VFS, …)` 호출. `initInstance` config JSON에 `bootMode`(SIMULATED|REAL) 추가, native가 파싱·분기. flag(`REAL_GUEST_BOOT_ENABLED`)는 ROM+wiring 완비 후 on.
+  - 대상: `jni/vm_native_bridge.cpp`, `vm/VmConfig.kt`(bootMode 직렬화), `vm/VmInstanceService.kt`(이미 `GuestBootPolicy.select` 배선), `guest/guest_boot.*`(코어 준비됨).
+  - 선결: 클린룸 ROM(`bootReady=true`, `build_aosp_guest_rom.sh`).
+  - 검증: bootReady ROM + flag on에서 게스트 출처 부팅 마커 도달(`GuestBootStatus.isRealGuestBoot()`), `synthetic=0`.
+  - DoD: 실제 게스트가 linker→libc→app_process까지 실부팅(게스트 출처).
 
 **Phase Exit Gate**
 
 ```text
 G1_RESULT passed=true linker_real=true reloc_applied=true syscalls_real=true heap_real=true tls_safe=true vfs_mapped=true thread_create=true synthetic=0
 ```
+> 현재: `passed=false` — 메커니즘(2.1~2.8)은 실증됐으나 EP2.9(REAL 부팅 wiring) + 클린룸 ROM이 잔여. flag를 켜 bootReady ROM이 게스트 출처 마커에 도달할 때 `passed=true`.
 
-**리스크**: 최상(연구성). → EP2.5/EP2.3을 가장 먼저 작은 PoC로 굳히고, 비루트 정책(memfd/PROT_EXEC) 매트릭스 유지.
+**리스크**: 최상(연구성). → EP2.5/EP2.3을 가장 먼저 작은 PoC로 굳히고, 비루트 정책(memfd/PROT_EXEC) 매트릭스 유지. EP2.9는 코어가 승격돼 리스크 하향, 단 ROM 확보가 외부 인프라 의존.
 
 ---
 
@@ -422,28 +487,31 @@ PRODUCT_P5_DATA passed=true snapshot_atomic=true backup_restore=true corrupt_rep
 
 ---
 
-## EP8 — Security / Updates (M7 / P6)
+## EP8 — Security / Updates (M7 / P6) 🟡 (부분 — 8.2/8.3 완료)
 
 **Phase 목표**: 클린룸 원칙 유지하며 ROM/업데이트/보안 경계 완성. **EP2~EP4와 병렬 가능.**
 
 **선행**: EP0.
 
+> 현황: 8.2·8.3 완료. ROM 확보 트랙(`RootfsHealthCheck.bootReady`, `build_aosp_guest_rom.sh`)도 이 영역에서 파생됨 — [`guest-rom-acquisition-strategy.md`](./guest-rom-acquisition-strategy.md) 참조. 8.1·8.4·8.5·8.6·8.7·8.8은 호스트 측이라 G-track과 병렬 진행 권장.
+
 ### Steps
 
-- **EP8.1 — StubSha256SignatureVerifier 제품 경로 제거** — 대상 `storage/RomUpdateChannel.kt`. DoD: 제품 경로에 stub 0.
-- **EP8.2 — Ed25519 실제 연결** — offline manifest import 흐름에서 서명 검증 후에만 rootfs commit. 대상 `storage/RomUpdateChannel.kt`(`Ed25519SignatureVerifier`). DoD: `ed25519=true`.
-- **EP8.3 — tar.zst 추출 실구현** — native zstd/tar. 대상 `storage/RomArchiveReader.kt`. DoD: tar.zst 추출 성공.
-- **EP8.4 — 외부 ROM import 경로** — `bundledCandidates()` 전용 → SAF/file picker로 사용자 ROM import. 대상 `storage/RomInstaller.kt`,`ui/MainActivity.kt`. DoD: 외부 ROM import 동작.
-- **EP8.5 — update manifest schema versioning + rollback 정책** — 대상 update 채널. DoD: 버전/롤백 정책 정의.
-- **EP8.6 — offline-only 검증(release gate)** — network fetch/background polling/telemetry/silent auto-update 0. DoD: `telemetry=off`, offline-only.
-- **EP8.7 — proprietary 바이너리 인벤토리 + license/provenance 문서** — 대상 문서/감사. DoD: `bundled_proprietary=0`, `license_docs=true`.
-- **EP8.8 — crash report local-only** — opt-in 없이 외부 전송 금지. 대상 `diag/CrashReportStore.kt`. DoD: 기본 외부 전송 0.
+- **EP8.1 — StubSha256SignatureVerifier 제품 경로 제거** ⬜ — 대상 `storage/RomUpdateChannel.kt`. DoD: 제품 경로에 stub 0. (Stub은 현재 import 게이트에서 미사용 — `RomSignaturePolicy`가 Ed25519만 anchor; 코드 잔존 제거 잔여.)
+- **EP8.2 — Ed25519 실제 연결** ✅ — `RomSignaturePolicy`를 `RomInstaller.install()`에 배선(서명 검증 후에만 commit, 미서명 dev 허용, 서명+anchor 없으면 fail-closed). 대상 `storage/RomUpdateChannel.kt`,`RomInstaller.kt`. ⚠️ API<33 번들 Ed25519 후속. (`9fcb7d4`)
+- **EP8.3 — tar.zst 추출 실구현** ✅ — commons-compress tar(symlink·권한·traversal) + **NDK libzstd** on-device. 대상 `storage/RomArchiveReader.kt`,`Zstd.kt`,`jni/zstd_bridge.cpp`. (`d63e7f9`,`b544489`)
+- **EP8.4 — 외부 ROM import 경로** ⬜ — `bundledCandidates()` 전용 → SAF/file picker로 사용자 ROM import + `RomSignaturePolicy.ed25519Import`. 대상 `storage/RomInstaller.kt`,`ui/MainActivity.kt`. DoD: 외부 ROM import 동작.
+- **EP8.5 — update manifest schema versioning + rollback 정책** 🟡 — patch level 단조 증가는 `RomUpdateChannel`에 구현됨; rollback 정책 문서화 잔여. 대상 update 채널.
+- **EP8.6 — offline-only 검증(release gate)** ⬜ — network fetch/background polling/telemetry/silent auto-update 0. DoD: `telemetry=off`, offline-only.
+- **EP8.7 — proprietary 바이너리 인벤토리 + license/provenance 문서** ⬜ — 대상 문서/감사. DoD: `bundled_proprietary=0`, `license_docs=true`.
+- **EP8.8 — crash report local-only** ⬜ — opt-in 없이 외부 전송 금지. 대상 `diag/CrashReportStore.kt`. DoD: 기본 외부 전송 0.
 
 **Phase Exit Gate**
 
 ```text
 PRODUCT_P6_SECURITY passed=true ed25519=true telemetry=off bundled_proprietary=0 license_docs=true
 ```
+> 현재: `ed25519=true`(8.2) 충족, tar.zst·bootReady·ROM 빌더 완료. 잔여 = 8.1(stub 잔존 제거)·8.4(외부 import)·8.6·8.7·8.8.
 
 ---
 
