@@ -13,6 +13,14 @@ object VmNativeBridge {
     @JvmStatic
     external fun initInstance(instanceId: String, configJson: String): Int
 
+    /**
+     * EP2.9 — select the guest boot mode before [startGuest]. realBoot=true runs the
+     * real Option B boot (bootGuestViaLinker, VFS gateway); false (default for all
+     * existing callers) runs the labeled simulated path. Gated by GuestBootPolicy.
+     */
+    @JvmStatic
+    external fun setBootMode(instanceId: String, realBoot: Boolean): Int
+
     @JvmStatic
     external fun startGuest(instanceId: String): Int
 

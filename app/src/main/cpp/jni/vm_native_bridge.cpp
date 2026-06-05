@@ -8,6 +8,7 @@
 #include "binder/service_manager.h"
 #include "binder/thread_pool.h"
 #include "device/ashmem.h"
+#include "guest/guest_boot.h"
 #include "property/property_area.h"
 #include "property/property_service.h"
 
@@ -226,6 +227,9 @@ struct Instance {
     std::thread guestThread;
     std::atomic<bool> guestRunning = false;
     std::atomic<bool> guestProcessRunning = false;
+    // EP2.9: REAL Option B boot vs the labeled simulated path. Set by setBootMode
+    // before startGuest; flag-gated off in GuestBootPolicy, so false in practice today.
+    std::atomic<bool> realBoot = false;
     std::atomic<bool> renderRunning = false;
     std::atomic<int64_t> inputEvents = 0;
     int state = 1;
@@ -1315,11 +1319,44 @@ void phaseBGuestRuntimeEntrypoint(const std::shared_ptr<Instance>& instance, con
     instance->guestProcessRunning.store(false);
 }
 
+// EP2.9 — REAL Option B boot: map the ROM's linker64 + app_process64 and run the
+// promoted guest-boot core. No canned full-boot markers (those are EP3) — the
+// status reflects only what actually happened (guest-origin). Reached only when
+// setBootMode(realBoot=true) was called (i.e. bootReady ROM + flag on).
+void realGuestBootEntrypoint(const std::shared_ptr<Instance>& instance, const std::string& instanceId) {
+    instance->guestProcessRunning.store(true);
+    std::string rootfs;
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        rootfs = instance->rootfsPath;
+    }
+    appendInstanceLog(instance, "REAL guest boot via linker64 id=" + instanceId);
+    const avm::guest::GuestBootResult result = avm::guest::bootGuestViaLinker(
+        rootfs,
+        rootfs + "/system/bin/app_process64",
+        rootfs + "/system/bin/linker64",
+        avm::guest::GatewayMode::VFS,
+        /*timeoutMs=*/8000);
+    {
+        std::lock_guard<std::mutex> guard(instance->lock);
+        instance->bootstrapStatus = std::string("runtime_mode=real;linker_ran=") +
+            (result.linkerRan ? "true" : "false") + ";reason=" +
+            (result.ok ? "ok" : result.reason);
+    }
+    appendInstanceLog(instance, std::string("REAL boot ok=") + (result.ok ? "true" : "false") +
+        " linker_ran=" + (result.linkerRan ? "true" : "false"));
+    instance->guestProcessRunning.store(false);
+}
+
 void startGuestProcessThread(const std::shared_ptr<Instance>& instance, const std::string& instanceId) {
     if (instance->guestThread.joinable()) {
         instance->guestThread.join();
     }
-    instance->guestThread = std::thread(phaseBGuestRuntimeEntrypoint, instance, instanceId);
+    if (instance->realBoot.load()) {
+        instance->guestThread = std::thread(realGuestBootEntrypoint, instance, instanceId);
+    } else {
+        instance->guestThread = std::thread(phaseBGuestRuntimeEntrypoint, instance, instanceId);
+    }
 }
 
 void stopGuestProcessThread(const std::shared_ptr<Instance>& instance) {
@@ -1559,6 +1596,25 @@ Java_dev_jongwoo_androidvm_vm_VmNativeBridge_initInstance(
     }
     appendInstanceLog(instance, "instance initialized id=" + id);
     AVM_LOGI("instance initialized id=%s configBytes=%zu", id.c_str(), config.size());
+    return kOk;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_jongwoo_androidvm_vm_VmNativeBridge_setBootMode(
+    JNIEnv* env,
+    jclass,
+    jstring instanceId,
+    jboolean realBoot
+) {
+    const auto id = ScopedUtfChars(env, instanceId).str();
+    if (id.empty()) {
+        return kInvalidInstance;
+    }
+    auto instance = findInstance(id);
+    if (!instance) {
+        return kInvalidInstance;
+    }
+    instance->realBoot.store(realBoot == JNI_TRUE);
     return kOk;
 }
 

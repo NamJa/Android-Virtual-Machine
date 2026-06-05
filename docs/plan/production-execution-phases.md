@@ -97,7 +97,7 @@ EP0 ──► EP1 ──► EP2 ──► EP3 ──► EP4 ──┬──► E
 EP2의 "메커니즘"은 모두 실증됐다. G1의 잔여는 **메커니즘이 아니라 "클린룸 ROM이 end-to-end로 실제 부팅"** 이다. 이를 닫는 임계 경로:
 
 1. **(선결) 클린룸 AOSP arm64 ROM 생성** — `build_aosp_guest_rom.sh`로 빌드(도구 준비 완료) → `bootReady=true`. *유일하게 도구 밖 인프라(Docker AOSP 빌드)가 필요한 항목.*
-2. **EP2.9 (신규) — REAL 부팅 wiring** (아래 EP2에 추가): `initInstance` config에 `bootMode` 전달 → native가 REAL이면 `phaseBGuestRuntimeEntrypoint`(시뮬레이션) 대신 `bootGuestViaLinker(rootfs, .../linker64, GatewayMode::VFS, …)` 호출 → `synthetic=0`, 게스트 출처 마커. **코어(`bootGuestViaLinker`)는 승격 완료, native 분기 + JNI 계약만 잔여.**
+2. **EP2.9 — REAL 부팅 wiring** ✅ 배선 완료: `setBootMode` JNI → `Instance.realBoot` → `startGuestProcessThread` 분기 → REAL이면 `realGuestBootEntrypoint`(`bootGuestViaLinker(GatewayMode::VFS)`). `VmInstanceService`가 `GuestBootPolicy.select`로 호출. flag off라 현재 simulated(동작 불변). **잔여는 flag on + ROM뿐.**
 3. **`REAL_GUEST_BOOT_ENABLED=true`** (`GuestBootPolicy`) — flag 1개.
 4. EP2.7(/proc·/sys 폭) + 서비싱 폭(binder ioctl/property/socket)은 **EP3와 함께 점증** — G1 최소 부팅엔 linker→libc→app_process 도달이면 충분, 전체 서비싱은 EP3/4에서 확장.
 
@@ -276,11 +276,11 @@ GUEST_ARCH_DECISION passed=true approach={A|B|C} spike_oncreate_reached=true ris
   - 검증: 게스트가 pthread 생성·조인. (probe `clone_thread=true` + 정책상 ALLOW)
   - DoD: 멀티스레드 게스트 코드 동작.
 
-- **EP2.9 — REAL 부팅 wiring (신규, G1 마무리)** ⬜
-  - 작업: 시뮬레이션 `phaseBGuestRuntimeEntrypoint`를 boot-mode 분기로 대체 — REAL이면 `bootGuestViaLinker(rootfs, rootfs+"/system/bin/app_process64", rootfs+"/system/bin/linker64", GatewayMode::VFS, …)` 호출. `initInstance` config JSON에 `bootMode`(SIMULATED|REAL) 추가, native가 파싱·분기. flag(`REAL_GUEST_BOOT_ENABLED`)는 ROM+wiring 완비 후 on.
-  - 대상: `jni/vm_native_bridge.cpp`, `vm/VmConfig.kt`(bootMode 직렬화), `vm/VmInstanceService.kt`(이미 `GuestBootPolicy.select` 배선), `guest/guest_boot.*`(코어 준비됨).
-  - 선결: 클린룸 ROM(`bootReady=true`, `build_aosp_guest_rom.sh`).
-  - 검증: bootReady ROM + flag on에서 게스트 출처 부팅 마커 도달(`GuestBootStatus.isRealGuestBoot()`), `synthetic=0`.
+- **EP2.9 — REAL 부팅 wiring (신규, G1 마무리)** 🟡 (wiring 완료 / flag·ROM 잔여)
+  - 작업: boot-mode 분기 배선 완료 — `VmNativeBridge.setBootMode(instanceId, realBoot)`(신규 JNI)가 `Instance.realBoot` 설정 → `startGuestProcessThread`가 REAL이면 `realGuestBootEntrypoint`(=`bootGuestViaLinker(rootfs, .../app_process64, .../linker64, GatewayMode::VFS)`), 아니면 시뮬레이션. `VmInstanceService.startRuntime`이 `GuestBootPolicy.select` 결과로 `setBootMode` 호출. REAL 상태는 canned 금지(게스트 출처 status만).
+  - 대상: `jni/vm_native_bridge.cpp`(setBootMode + realGuestBootEntrypoint + 분기), `vm/VmNativeBridge.kt`, `vm/VmInstanceService.kt`, `guest/guest_boot.*`(코어).
+  - 검증: NDK 빌드 green(setBootMode 심볼 링크, REAL 분기가 `bootGuestViaLinker` 참조), JVM green. 동작 불변(flag off → `realBoot=false` → simulated, API 29 라이브 `boot mode=SIMULATED` 확인).
+  - **잔여(G1)**: ① 클린룸 ROM(`bootReady=true`, `build_aosp_guest_rom.sh`) ② `REAL_GUEST_BOOT_ENABLED=true` → bootReady ROM이 게스트 출처 마커 도달(`GuestBootStatus.isRealGuestBoot()`), `synthetic=0`.
   - DoD: 실제 게스트가 linker→libc→app_process까지 실부팅(게스트 출처).
 
 **Phase Exit Gate**

@@ -145,6 +145,7 @@ open class VmInstanceService : Service() {
             Build.VERSION.SDK_INT,
         )
         val instanceResult = VmNativeBridge.initInstance(config.instanceId, config.toJson())
+        VmNativeBridge.setBootMode(config.instanceId, bootMode == GuestBootMode.REAL)
         val startResult = VmNativeBridge.startGuest(config.instanceId)
         if (initResult == 0 && instanceResult == 0 && startResult == 0) {
             setState(VmState.RUNNING)
