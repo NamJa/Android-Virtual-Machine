@@ -1,8 +1,8 @@
 # 실제 사용 가능한 제품 구현 Plan (Production Implementation Plan)
 
-> 작성일: 2026-06-02
+> 작성일: 2026-06-02 · **갱신: 2026-06-08**
 > 기준 커밋: `0be02de Add product readiness plan` 이후 작업 트리
-> 상태: **진단 게이트(Stage 1–7, Phase A–E) 완료 / 실제 제품 미완성**
+> 상태: **진단 게이트 완료 / 실제 제품 미완성** — 진행: **EP0·EP1 완료, EP2 메커니즘+배선 완료(G1은 클린룸 ROM+flag 잔여), EP8.2/8.3 완료.** 실행 현황은 `production-execution-phases.md` §1.5.
 > 목적: 현재 "진단/시뮬레이션 기반으로 게이트를 통과한" 코드베이스를, **사용자가 합법 ROM을 가져와 VM을 만들고, 실제 Android 게스트를 부팅해 실제 APK를 설치·실행하고, 실패에서 복구하고, 프라이버시/보안 경계를 신뢰할 수 있는** 제품으로 격상하기 위한 정밀 실행 계획.
 
 ---
@@ -11,16 +11,21 @@
 
 ### 0.1 기존 문서와의 관계
 
-| 문서 | 역할 | 이 문서와의 관계 |
-| --- | --- | --- |
-| `docs/planning/VPHONEOS_CLEANROOM_IMPLEMENTATION_PLAN.md` | 장기 클린룸 설계 근거 | 상위 설계 — 변경 없음 |
-| `docs/planning/stage-01..07-*.md` | 초기 빌드아웃 단계 | 완료된 과거 — 참조용 |
-| `docs/planning/phase-a..e-*.md` | 진단 게이트 정의 | 완료된 진단 기준 — 본 문서의 검증 출발점 |
-| `docs/planning/product-readiness-plan.md` | 제품화 P0–P8 + 5개 PRODUCT 게이트 | **본 문서가 보강/구체화하는 대상** |
-| **`docs/plan/production-implementation-plan.md` (본 문서)** | 실제 제품 구현 실행 계획(전략) | product-readiness-plan을 **대체하지 않고 확장** — 특히 "게스트 실제 실행" 트랙을 추가 |
-| `docs/plan/production-execution-phases.md` | 본 문서의 모든 작업을 실행 Phase(EP0–EP11) + Step-by-Step으로 변환한 실행 문서 | 본 문서의 **실행 동반 문서** — "무엇을 어떤 순서로 어떻게" |
+> **`docs/planning/` 제거(2026-06)**: 레거시 계획 문서(VPHONEOS plan·stage-01..07·phase-a..e·product-readiness-plan)는 작업 트리에서 **영구 제거**됐고 복원하지 않는다. 그 내용/게이트는 `docs/plan/` 세트로 흡수됐으며, **`docs/plan/`이 단일 권위 계획**이다. 아래 표의 `docs/planning/*` 행은 **계보(역사) 참조**로만 남긴다.
 
-**핵심 차이**: `product-readiness-plan.md`는 게스트 런타임이 "이미 앱을 실행하고 있고 굳히기(hardening)만 남았다"는 가정에 가깝다. 그러나 §1의 정밀 진단대로 게스트는 **아직 실제 코드를 실행하지 않는다**. 따라서 본 문서는 P-track(제품 표면) 앞에 **G-track(게스트 실제 실행)** 을 명시적으로 추가한다.
+| 문서 | 역할 | 관계 |
+| --- | --- | --- |
+| ~~`docs/planning/*`~~ (제거됨) | 레거시 VPHONEOS plan·stage·phase·product-readiness | 계보 참조만 — 본 plan/실행 EP가 흡수·대체 |
+| **`docs/plan/production-implementation-plan.md` (본 문서)** | 실제 제품 구현 **전략** | P-track(P0–P8 계승) 앞에 G-track(게스트 실제 실행) 추가 |
+| `docs/plan/production-execution-phases.md` | **실행** — EP0–EP11 Step-by-Step + 현황(§1.5) | 본 문서의 실행 동반 문서(권위 진행 상태) |
+| `docs/plan/ep0-gate-semantics.md` | debug vs product 게이트 의미 + on-device 시나리오 | EP0.7 |
+| `docs/plan/ep1-guest-arch-spike.md` | 게스트 실행 아키텍처 결정(Option B) | EP1 |
+| `docs/plan/ep2-guest-core-design.md` | Option B 게스트 실행 코어 설계/현황 | EP2 |
+| `docs/plan/guest-rom-acquisition-strategy.md` | 클린룸 ROM 확보·패키징·선결 | EP8/G1 선결 |
+| `docs/plan/vm-boot-integration-design.md` | 실부팅 통합(boot-mode/REAL 경로) | EP2.9 |
+| `docs/plan/g1-rom-build-and-finish.md` | 클린룸 ROM 빌드→실부팅→G1 closure 절차 | G1 마무리 |
+
+**핵심 차이**: 레거시 `product-readiness-plan`은 게스트 런타임이 "이미 앱을 실행하고 굳히기만 남았다"는 가정에 가까웠다. 그러나 §1 정밀 진단대로 게스트는 **아직 실제 코드를 실행하지 않았다**(시뮬레이션). 따라서 본 문서는 P-track(제품 표면) 앞에 **G-track(게스트 실제 실행)** 을 명시적으로 추가했고, 이번 세션에 G-track의 메커니즘·배선(EP1·EP2·EP2.9)을 닫았다(실부팅은 ROM+flag 잔여).
 
 ### 0.2 본 문서의 구성
 

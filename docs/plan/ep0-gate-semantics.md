@@ -38,6 +38,6 @@ product 변형 APK를 실기기/release-equivalent 에뮬레이터에 설치한 
 | S9 | crash/boot 실패 시 복구 메시지 + 아티팩트 번들 | `FailureBundle` ZIP(redaction 적용) | resilience/crash_report, boot_repair | EP0.5/EP7 |
 | S10 | release 빌드에 debug receiver/fixed source 0, telemetry 0 | 정적 가드 + 매니페스트 | release/debug_surface, security/telemetry | EP10 |
 
-## 3. 보류 항목 (docs/planning 의존)
+## 3. docs/planning 제거 — 항목 드롭(확정)
 
-EP0.7의 나머지 한 항목 — "Phase A–E 문서(`docs/planning/phase-*.md`)의 '잔여 Step' 표를 완료/제품화 잔여로 분리" — 는 현재 `docs/planning/*.md`가 작업 트리에서 **삭제 상태**라 보류한다. 해당 파일 복원(또는 의도적 삭제 확정) 후 진행한다. (워크플로/코드에는 영향 없음.)
+EP0.7의 나머지 한 항목이었던 "Phase A–E 문서(`docs/planning/phase-*.md`)의 '잔여 Step' 표 분리"는 **드롭한다**: `docs/planning/`(레거시 Stage/Phase·product-readiness 계획)은 작업 트리에서 **영구 제거**되며 복원하지 않기로 확정됐다. 그 내용은 `docs/plan/` 세트로 흡수됐고, **이제 `docs/plan/`이 단일 권위 계획**이다. 분리 대상 문서가 존재하지 않으므로 본 항목은 불요(워크플로/코드 무영향).

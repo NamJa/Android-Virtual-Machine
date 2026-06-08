@@ -13,10 +13,12 @@
 
 | 체계 | 의미 | 출처 |
 | --- | --- | --- |
-| Phase A–E | 진단/회귀 게이트 (완료됨) | `docs/planning/phase-*.md` |
-| P0–P8 | product-readiness 제품화 섹션 | `docs/planning/product-readiness-plan.md` |
+| Phase A–E | 진단/회귀 게이트 (완료됨, 레거시) | ~~`docs/planning/phase-*.md`~~ (제거됨 — 아래 주) |
+| P0–P8 | product-readiness 제품화 섹션 (계보) | ~~`docs/planning/product-readiness-plan.md`~~ (제거됨) |
 | M0/G1–G3/M4–M9 | 상위 plan의 마일스톤 | `docs/plan/production-implementation-plan.md` |
 | **EP0–EP11** | **본 문서의 실행 단위 (Step 포함)** | 본 문서 |
+
+> **`docs/planning/` 제거(2026-06)**: 레거시 Stage/Phase·product-readiness 계획 문서는 작업 트리에서 제거됐고 **복원하지 않는다**. 그 내용은 `docs/plan/` 세트로 흡수·대체됐으며, **이제 `docs/plan/`이 단일 권위 계획**이다(P0–P8/Phase A–E 명칭은 게이트 계보로만 참조). `docs/plan/` 문서 색인: `production-implementation-plan`(전략)·본 문서(실행 EP)·`ep0-gate-semantics`·`ep1-guest-arch-spike`·`ep2-guest-core-design`·`guest-rom-acquisition-strategy`·`vm-boot-integration-design`·`g1-rom-build-and-finish`.
 
 ### Step 표기 규약
 
@@ -155,11 +157,11 @@ EP2의 "메커니즘"은 모두 실증됐다. G1의 잔여는 **메커니즘이 
   - 검증: PR은 fast gate, nightly는 device gate 실행.
   - DoD: 두 워크플로가 각각 green.
 
-- **EP0.7 — 진실성 문서/시나리오 고정 (P0 잔여)**
-  - 작업: debug receiver gate와 release product gate의 차이를 문서화. "제품으로 인정되는 on-device 시나리오" 목록 고정. Phase A–E 문서의 "잔여 Step" 표를 완료/제품화 잔여로 분리.
-  - 대상: `docs/planning/phase-*.md`, `docs/plan/production-implementation-plan.md`, README.
-  - 검증: stale 문서 0(상호 참조 일치).
-  - DoD: `PRODUCT_P0_DOC_TRUTH` 충족.
+- **EP0.7 — 진실성 문서/시나리오 고정 (P0 잔여)** ✅ (재정의)
+  - 작업: debug receiver gate와 release product gate의 차이를 문서화(`ep0-gate-semantics.md`). "제품으로 인정되는 on-device 시나리오" 목록 고정(동 §2).
+  - ~~Phase A–E 문서의 "잔여 Step" 표 분리~~ → **드롭**: `docs/planning/`이 영구 제거되어 `docs/plan/`이 권위 계획이 됨(§0 주). 분리 대상 문서가 없으므로 불요.
+  - 대상: `docs/plan/ep0-gate-semantics.md`, `docs/plan/production-implementation-plan.md`.
+  - DoD: `PRODUCT_P0_DOC_TRUTH` — stale 문서 0(docs/plan 내 상호 참조 일치).
 
 **Phase Exit Gate**
 

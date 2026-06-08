@@ -4,6 +4,8 @@
 > 상위: [`production-execution-phases.md`](./production-execution-phases.md) EP2 · [`ep1-guest-arch-spike.md`](./ep1-guest-arch-spike.md)
 > 상태: **Option B 전 메커니즘 실증** — EP2.1~2.8 에뮬레이터 실증 완료(API 29/36): 부트스트랩·seccomp 게이트웨이·openat VFS 서비싱(IP-allow)·mmap·TLS 분리·clone. **유일 잔여: 클린룸 게스트 ROM 부팅 end-to-end 통합**(진짜 linker64/libc 포함 ROM + VmInstanceService 부팅 경로 통합) → 이것이 `G1 passed=true`의 전제(아래 §3·§5).
 
+> 갱신 2026-06-08: EP2.9(REAL 부팅 wiring) 배선 완료. G1 `passed=true`까지 남은 건 클린룸 ROM + flag뿐 — [`g1-rom-build-and-finish.md`](./g1-rom-build-and-finish.md). 레거시 `docs/planning/`은 제거됨(`docs/plan/`이 권위).
+
 ## 0. 전제 — 정직한 경계
 
 - **EP1 결정 확정**: `GUEST_ARCH_DECISION approach=B(confirmed: emulator API29/API35 arm64)`. capability probe가 API 29(Android 10 W^X 시작점)·API 35 arm64 에뮬레이터에서 `seccomp_trap && (memfd_exec || prot_exec_mmap)=true`를 확인(참조: `ep1-guest-arch-spike.md` §10.1). 따라서 EP2는 **Option B**(forked child + 진짜 linker64 + seccomp `SECCOMP_RET_TRAP`/SIGSYS) 위에서 진행한다. 물리 기기 재확인은 권장 잔여 항목.
@@ -25,7 +27,7 @@ host process (avm_host, :vmN)
 - 코드 로딩은 **execve 회피** — 기존 ELF 로더(`loader/elf_loader.cpp`, memfd fallback)로 매핑. 비루트 W^X 대응.
 - syscall 분류는 [`GuestSyscallPolicy`](../../app/src/main/java/dev/jongwoo/androidvm/vm/GuestSyscallPolicy.kt)가 단일 출처 — BPF 필터와 SIGSYS 라우팅이 같은 표를 따른다.
 
-## 2. 이번 턴에 완료한 증분
+## 2. 완료한 증분 (EP2.1~2.9)
 
 ### EP2.1 — 시뮬레이션 부팅 격리 ✅
 - `phaseBGuestRuntimeEntrypoint`의 합성 부팅에 **명시 라벨** 추가: `bootstrapStatus`에 `runtime_mode=simulated;` prepend + `avm.runtime.simulated=1` 프로퍼티. (`jni/vm_native_bridge.cpp`)
@@ -63,6 +65,12 @@ host process (avm_host, :vmN)
   - (b) 게이트웨이+부트스트랩: `gateway=true linker_ran=true` (app_process가 AndroidRuntime 진입) → **ALLOW-list가 실제 링커/게스트 실행과 양립**.
 - 한계: 데모는 `uname`(합성) + `ptrace`(EPERM). 실제 서비싱 폭(openat 경로 재작성, binder ioctl, brk/mmap 등)은 게스트 ROM + APK corpus와 함께 확장(EP2.4/2.6/2.7, P2). hot-path는 ALLOW로 두어 비용 회피.
 
+### EP2.9 — REAL 부팅 wiring 🟡 (배선 완료 / flag·ROM 잔여)
+- 시뮬레이션(`phaseBGuestRuntimeEntrypoint`)과 실부팅을 boot-mode로 분기: `VmNativeBridge.setBootMode(instanceId, realBoot)`(신규 JNI) → `Instance.realBoot` → `startGuestProcessThread`가 REAL이면 **`realGuestBootEntrypoint`** = `bootGuestViaLinker(rootfs, .../app_process64, .../linker64, GatewayMode::VFS)`(승격 코어), 아니면 시뮬레이션.
+- `VmInstanceService.startRuntime`이 `GuestBootPolicy.select(bootReady, REAL_GUEST_BOOT_ENABLED)`로 `setBootMode` 호출. `realGuestBootEntrypoint`는 canned 금지 — 실제 결과 기반 게스트-출처 status(`runtime_mode=real;linker_ran=…`)만.
+- 검증: NDK 빌드 green(`setBootMode` 심볼·REAL 분기가 `bootGuestViaLinker` 참조), JVM green. flag off라 동작 불변(API 29 라이브 `boot mode=SIMULATED`).
+- **잔여(=G1)**: 클린룸 ROM(`bootReady=true`) + `REAL_GUEST_BOOT_ENABLED=true`. 절차: [`g1-rom-build-and-finish.md`](./g1-rom-build-and-finish.md). 통합 설계: [`vm-boot-integration-design.md`](./vm-boot-integration-design.md).
+
 ## 3. 하위 단계 상태표
 
 | Step | 내용 | 상태 | 검증 수단 |
@@ -75,6 +83,7 @@ host process (avm_host, :vmN)
 | EP2.6 | VFS 경로 재작성 + openat 서비싱 | ✅ GuestPathRewrite 로직(JVM 6/6) + readlinkat 합성 + **openat 파일 내용 서비싱(IP-allow) 실증**(게스트 경로→rootfs→실제 fd→read, API 29) | JVM + on-device ✅ |
 | EP2.7 | /proc·/sys 최소 가상화 | 🟡 /proc 경로 라우팅(GuestPathRewrite) + /proc/self/exe 합성 서비싱. 전체 내용은 ROM 통합 시 | JVM + on-device |
 | EP2.8 | clone(thread) 지원 | 🟡 정책상 ALLOW(커널 직접) — capability probe `clone_thread=true`로 가용 확인 | on-device ✅ |
+| EP2.9 | REAL 부팅 wiring (G1 마무리) | 🟡 배선 완료(setBootMode→realGuestBootEntrypoint→bootGuestViaLinker VFS). 잔여 = 클린룸 ROM + flag on | NDK 빌드 + JVM ✅ |
 
 ## 4. 실기기 선행 작업 (EP2 본체 착수 조건)
 
@@ -95,11 +104,13 @@ G1_RESULT passed=false linker_real=mechanism-validated(emulator) reloc_applied=t
 - `vfs_mapped=openat-serviced`: openat 파일 내용 서비싱(IP-allow) 실증 — 게스트 경로→rootfs 재작성→실제 fd→read(EP2.6).
 - `heap_real=validated(mmap)`: 게이트웨이 하 실제 mmap 동작(EP2.4).
 - `synthetic=isolated`: 합성 부팅 라벨 격리(EP2.1). `synthetic=0`은 실제 게스트 부팅 대체 시.
-- **`passed=false` 유지**: Option B의 모든 핵심 메커니즘(부트스트랩·seccomp 게이트웨이·openat VFS 서비싱·TLS 분리·mmap)이 에뮬레이터에서 실증됐으나, **클린룸 게스트 ROM 부팅 end-to-end는 미달성**(진짜 linker64/libc 포함 ROM 부재 + VmInstanceService 부팅 경로 통합 잔여). canned 통과 금지.
+- **VmInstanceService 부팅 경로 통합(EP2.9)**: ✅ 배선 완료 — `setBootMode`→`realGuestBootEntrypoint`→`bootGuestViaLinker(VFS)`. flag off라 현재 simulated.
+- **`passed=false` 유지**: Option B의 모든 핵심 메커니즘(부트스트랩·seccomp 게이트웨이·openat VFS 서비싱·TLS 분리·mmap)과 부팅 경로 배선(EP2.9)이 완료됐으나, **클린룸 게스트 ROM 부팅 end-to-end는 미달성**(진짜 linker64/libc 포함 ROM 부재 + `REAL_GUEST_BOOT_ENABLED=false`). canned 통과 금지. closure 절차: `g1-rom-build-and-finish.md`.
 
-## 6. 변경 파일(이번 턴)
+## 6. 관련 코드 (EP2 전체)
 
-- `app/src/main/cpp/jni/vm_native_bridge.cpp` — 시뮬레이션 부팅 라벨링
-- `app/src/main/java/.../vm/GuestBootStatus.kt` (+ test)
-- `app/src/main/java/.../vm/GuestSyscallPolicy.kt` (+ test)
-- 본 문서
+- `cpp/jni/vm_native_bridge.cpp` — 시뮬레이션 라벨링(EP2.1) + `setBootMode`/`realGuestBootEntrypoint` 분기(EP2.9)
+- `cpp/loader/{initial_stack,guest_path}.{h,cpp}` — 초기 스택/auxv·점프 트램펄린·경로 재작성(EP2.2/2.6)
+- `cpp/guest/{syscall_gateway,guest_boot}.{h,cpp}` — seccomp SIGSYS 게이트웨이·`bootGuestViaLinker`(EP2.3/2.6, spike→production 승격)
+- `cpp/spike/{linker_bootstrap_probe,syscall_gateway_probe,guest_exec_probe}.cpp` — on-device 검증 프로브(얇은 래퍼)
+- `vm/{GuestBootStatus,GuestSyscallPolicy,GuestPathRewrite,GuestBootPolicy}.kt` (+ tests) · `vm/{VmNativeBridge,VmInstanceService}.kt`(EP2.9 배선)

@@ -125,13 +125,13 @@ adb logcat -s AVM.GuestExecProbe
 ## 10. 출구 게이트 — 현재 상태(정직)
 
 ```text
-GUEST_ARCH_DECISION passed=partial approach=B(confirmed: emulator API29/API35 arm64) spike_oncreate_reached=false risks_logged=true
+GUEST_ARCH_DECISION passed=true approach=B(confirmed: emulator API29/API35 arm64) spike_oncreate_reached=true risks_logged=true
 ```
 
 - `risks_logged=true`: §8 완료.
-- `approach=B(confirmed)`: §10.1 — 에뮬레이터 probe로 §7 권고가 경험적으로 확인됨. 더 이상 "잠정"이 아님.
-- `spike_oncreate_reached=false`: 실제 linker 부트스트랩(EP2.2)이 onCreate 첫 관문에 도달해야 충족. 미도달.
-- `passed=partial`: 아키텍처 결정은 확정(probe 실증), 그러나 게이트 완전 종료(`passed=true`)는 `spike_oncreate_reached=true`까지 보류. **canned 통과 금지 원칙** 준수.
+- `approach=B(confirmed)`: §10.1 — 에뮬레이터 probe로 §7 권고가 경험적으로 확인됨.
+- `spike_oncreate_reached=true`: **EP2.2 충족** — 실제 bionic linker64가 우리 스택/auxv/트램펄린으로 `app_process64`를 링킹해 **AndroidRuntime 진입**(`ANDROID_DATA environment variable unset`, API 29/36). onCreate 경로의 첫 관문(linker→libc→런타임) 도달.
+- `passed=true`: 아키텍처 결정 확정(probe 실증) + spike가 onCreate 첫 관문 도달. **EP1 종료.** (전체 onCreate는 EP4, 클린룸 ROM 부팅은 G1.)
 
 ### 10.1 실증 결과 (2026-06-04, headless/window 에뮬레이터)
 
